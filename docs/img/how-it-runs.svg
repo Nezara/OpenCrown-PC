@@ -19,7 +19,7 @@
   <text x="335" y="185" text-anchor="middle" font-size="16" font-weight="600" fill="#1a2a4a">Loader</text>
   <text x="335" y="210" text-anchor="middle" font-size="13" fill="#2a3a5a">maps the eboot</text>
   <text x="335" y="228" text-anchor="middle" font-size="13" fill="#2a3a5a">into memory,</text>
-  <text x="335" y="246" text-anchor="middle" font-size="13" fill="#2a3a5a">2 byte patches</text>
+  <text x="335" y="246" text-anchor="middle" font-size="13" fill="#2a3a5a">34 bytes patched</text>
 
   <!-- game code -->
   <rect x="470" y="130" width="200" height="150" rx="12" fill="#fbecc8" stroke="#c08a2a" stroke-width="3"/>
@@ -48,5 +48,5 @@
   <path d="M672 170 L716 135" stroke="#8a7a6a" stroke-width="2.5" marker-start="url(#a)" marker-end="url(#a)"/>
   <path d="M672 240 L716 275" stroke="#8a7a6a" stroke-width="2.5" marker-end="url(#a)"/>
 
-  <text x="30" y="372" font-size="12.5" fill="#6a5a4a">Everything blue, green and red is OpenCrown's own code. The gold box is your copy of the game, unchanged apart from two bytes.</text>
+  <text x="30" y="372" font-size="12.5" fill="#6a5a4a">Everything blue, green and red is OpenCrown's own code. The gold box is your copy of the game, unchanged apart from 34 patched bytes.</text>
 </svg>

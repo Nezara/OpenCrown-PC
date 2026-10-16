@@ -83,7 +83,7 @@ OpenCrown needs the game's files from **a PS4 you own**: the **decrypted** `eboo
 > [!WARNING]
 > **PKG files won't work.** A PKG from the PS4 or the PlayStation Store is encrypted. OpenCrown can't decrypt it, and it never will. It also won't help you get the game any other way. Dump the copy you own with the usual homebrew tools for your console.
 
-Your dump is only ever **read**. OpenCrown never writes to it or modifies it; the two small patches described below are applied in memory each time you play.
+Your dump is only ever **read**. OpenCrown never writes to it or modifies it; the small patches described below (34 bytes in total) are applied in memory each time you play.
 
 ## Getting started
 
@@ -139,10 +139,13 @@ Keep a backup of your saves before moving them between devices. It's free insura
 
 Very little. The PS4 system libraries the game calls (kernel, file system, audio, controller, saves, fonts, networking) are **translated** to Windows equivalents, and the PS4 **renderer is rewritten** to draw the game's frames with OpenGL. **Everything else is the game's own native code**, running unchanged.
 
-There are **two tiny byte patches**, both applied in memory at run time and never written to your dump:
+The game's code is patched in **six places, 34 bytes in total**. The patches are applied in memory each time you play and never written to your dump:
 
-- **Story skip.** The game has its own "start from the second half" skip, but it normally only offers it once a class has cleared the game. The patch offers it to every new character. If you say no, it reminds you once that online play unlocks partway through the story, then respects your answer.
-- **Tutorial question.** Instead of starting the tutorial automatically, the game asks *"Begin the tutorial?"* on a save's first character.
+- **Story skip** (2 bytes). The game has its own "start from the second half" skip, but it normally only offers it once a class has cleared the game. One 2-byte change offers it to every new character.
+- **Skip reminder** (26 bytes in four places). If you say no to the story skip, the game asks once more with a reminder that online play unlocks partway through the story, then respects your answer. Four small jumps send the game to a few lines of OpenCrown's own code that show the reminder.
+- **Tutorial question** (6 bytes). Instead of starting the tutorial automatically, the game asks *"Begin the tutorial?"* on a save's first character.
+
+Each patch checks that the original bytes are exactly what it expects first; if they aren't, it leaves that spot alone.
 
 ## How it works
 

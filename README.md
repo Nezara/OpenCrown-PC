@@ -46,6 +46,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 - 🎨 **Rewritten renderer** for OpenGL 3.3, at 1080p or **4K** (the PS4 Pro mode).
 - 🎮 **Gamepads** (Xbox, DualShock / DualSense and others through SDL3), up to 4 local players, with rumble.
 - ⌨️ **Keyboard and mouse** with mouse attacks and the fairy pointer on the mouse, all rebindable.
+- 🔄 **Dynamic button prompts.** On-screen prompts switch between PlayStation buttons and your keyboard / mouse keys, following whichever you used last, and show your own bindings.
 - 💾 **PS4-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4 progress over and take it back.
 - 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with room codes and friend codes.
 - ⏭️ **Optional story and tutorial skip** on new characters (details [below](#what-is-changed-in-the-game)).
@@ -126,6 +127,8 @@ Gamepads work out of the box with the PS4 layout. Keyboard and mouse defaults ar
 | Look / right stick | **I J K L** | | Fairy pointer | **Hold middle mouse** |
 
 **The fairy pointer:** hold the middle mouse button and move the mouse to steer Rannie's fairy to treasure, doors and runes. Press **E** to tap while pointing. Mouse attacks are paused while you hold it. If you'd rather not hold a button, you can set an on/off key.
+
+**Button prompts follow you:** the game's on-screen prompts ("Press ✕", "Press TOUCHPAD to open Town Map" and so on) show PlayStation buttons while you use a gamepad. As soon as you touch the keyboard or mouse they switch to key caps and mouse icons labelled with your current bindings, and they switch back when you pick the pad up again. The key and mouse icons are OpenCrown's own drawings; the renderer swaps them in for the game's button sprites.
 
 **Handy extras:** **F1** shows performance stats, and **F12** saves a screenshot.
 

@@ -198,6 +198,7 @@ This is a 1.0 from a hobby project, so expect a few rough edges:
 - **Very strict networks** (some mobile or carrier-grade NAT connections) can stop the direct connection. There's no relay server yet.
 - **Friend status** can take about 10 seconds to update.
 - **Windows user names with non-English characters** (e.g. `C:\Users\Jürgen`) can break file paths. Choosing a save folder with a plain path works around it.
+- **Odd or unusual text can appear briefly on scene transitions.** The PS4's system text library isn't included, so some of the text it would supply has to be swapped for generic stand-in text. Most of these cases have been caught and fixed, but a few outliers may still slip through. If you spot one, a bug report with a screenshot (F12) helps.
 - The programs **aren't code-signed**, so SmartScreen and some antivirus tools may be suspicious at first.
 
 Found something else? Use the launcher's **Report a Bug** page or [open an issue](https://github.com/Nezara/OpenCrown-PC/issues).

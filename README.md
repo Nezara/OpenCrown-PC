@@ -1,6 +1,6 @@
 <h1 align="center">OpenCrown PC</h1>
 
-<p align="center"><i>Dragon's Crown Pro, running natively on Windows, from your own copy.</i></p>
+<p align="center"><i>Dragon's Crown Pro Multiplayer, running natively on Windows</i></p>
 
 <p align="center">
   <img src="docs/img/hero.jpg" alt="The Fighter in the Ancient Temple ruins, running in OpenCrown PC" width="100%">
@@ -27,7 +27,7 @@
 
 **OpenCrown PC** lets you play **Dragon's Crown Pro** on a Windows PC from a dump of your own PS4 copy. It is a native launcher, not an emulator: the game's own code runs directly on your CPU, while OpenCrown provides the PS4 system libraries, the renderer, input, saves and online play.
 
-This is a hobby project made by one person, with a lot of help from an AI. It's done for the love of the game. It isn't affiliated with or endorsed by Vanillaware, Atlus or Sony.
+This is a hobby project made by one person, with a lot of help from an AI around the online stuff. It isn't affiliated with or endorsed by Vanillaware, Atlus or Sony.
 
 > [!IMPORTANT]
 > **No game files are included, and none will ever be.** You need your own dump of Dragon's Crown Pro (CUSA10454). See [Your dump](#your-dump).
@@ -36,7 +36,7 @@ This is a hobby project made by one person, with a lot of help from an AI. It's 
 
 Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it here, please make sure they get paid for it.
 
-- 🛒 **Buy Dragon's Crown Pro** on the [PlayStation Store](https://store.playstation.com/en-us/product/UP2611-CUSA10454_00-DRAGONSCROWNPRO1). You need it to use this project anyway.
+- 🛒 **Buy Dragon's Crown Pro** on the [PlayStation Store](https://store.playstation.com/en-us/product/UP2611-CUSA10454_00-DRAGONSCROWNPRO1).
 - 🦄 **Play Unicorn Overlord**, Vanillaware's tactical RPG, on the [PlayStation Store](https://store.playstation.com/en-us/product/UP0177-PPSA09770_00-UNICORNOVERLORD0).
 - ⚔️ **Support Vanillaware's latest game**, [Muramasa: Revenant Blades on Steam](https://store.steampowered.com/app/4253770/Muramasa_Revenant_Blades/). It's the best way to tell them there's a PC audience for their games.
 
@@ -277,9 +277,9 @@ The programs aren't code-signed (signing certificates cost money), and a program
 ## Credits
 
 - **Vanillaware** and **Atlus** for making Dragon's Crown, a game that's still gorgeous years later.
-- **Nezara**, project lead, testing, and a lot of time spent playing the first stage over and over.
+- **Nezara**, project lead, bug hunting, diagnosing and a lot of testing, again and again and again. 
 - **Claude** (Anthropic), coding and reverse-engineering contributor.
-- The [shadPS4](https://github.com/shadps4-emu/shadPS4) project, used as a reference to compare against while working out how the game behaves.
+- The [shadPS4](https://github.com/shadps4-emu/shadPS4) project, used as a reference to compare against during early stages of development. 
 - [SDL](https://www.libsdl.org/), [Dear ImGui](https://github.com/ocornut/imgui), [FreeType](https://freetype.org/) and [MiniUPnPc](https://miniupnp.tuxfamily.org/), which make this possible.
 
 ## Legal

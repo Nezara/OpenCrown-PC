@@ -44,7 +44,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 ## Made with AI assistance 🤖
 
 > [!IMPORTANT]
-> **OpenCrown PC was built with substantial help from AI.** Much of the code and the reverse-engineering behind it was written by **Claude**, Anthropic's AI model. **Nezara** led the project: set the direction, decided what went in, and tested, hunted bugs and diagnosed problems on every build. The full source is public, so you can see exactly what's here.
+> **OpenCrown PC was built with help from AI.** Much of the code and the reverse-engineering behind it was written by **Claude**, Anthropic's AI model. **Nezara** led the project: set the direction, decided what went in, and tested, hunted bugs and diagnosed problems on every build. The full source is public, so you can see exactly what's here.
 
 ## Features
 

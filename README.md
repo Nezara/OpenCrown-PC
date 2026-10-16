@@ -293,7 +293,7 @@ The programs aren't code-signed (signing certificates cost money), and a program
 
 ## Help keep the server running
 
-OpenCrown is free and always will be. Donations go **only** toward hosting the online server; there are no perks, rewards or early builds, and everyone gets the same thing whether they donate or not.
+OpenCrown is free and always will be. Donations will go toward upgrading the server and any ongoing server maintenance. Any overflow will go towards building more resources for the community; there are no perks, rewards or early builds, and everyone gets the same thing whether they donate or not.
 
 <p align="center">
   <a href="https://ko-fi.com/nezara"><img alt="Support the server on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support%20the%20server-ff5e5b?logo=ko-fi&logoColor=white"></a>

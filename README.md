@@ -9,8 +9,9 @@
 <p align="center">
   <a href="https://github.com/Nezara/OpenCrown-PC/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Nezara/OpenCrown-PC?label=release&color=c08a2a"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011%20x64-3a5a8a">
-  <img alt="Requires your own copy" src="https://img.shields.io/badge/requires-your%20own%20PS4%20dump-8a3a4a">
+  <img alt="Requires your own copy" src="https://img.shields.io/badge/requires-your%20own%20PS4%2FPS5%20dump-8a3a4a">
   <img alt="Online" src="https://img.shields.io/badge/online-peer--to--peer-3a8a5a">
+  <a href="https://discord.gg/srBT23NYRA"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white"></a>
 </p>
 
 <p align="center">
@@ -25,7 +26,7 @@
 
 ---
 
-**OpenCrown PC** lets you play **Dragon's Crown Pro** on a Windows PC from a dump of your own PS4 copy. It is a native launcher, not an emulator: the game's own code runs directly on your CPU, while OpenCrown provides the PS4 system libraries, the renderer, input, saves and online play.
+**OpenCrown PC** lets you play **Dragon's Crown Pro** on a Windows PC from a dump of your own PS4/PS5 copy. It is a native launcher, not an emulator: the game's own code runs directly on your CPU, while OpenCrown provides the PS4 system libraries, the renderer, input, saves and online play.
 
 This is a hobby project made by one person with AI assistance ([details below](#made-with-ai-assistance-)). It isn't affiliated with or endorsed by Vanillaware, Atlus or Sony.
 
@@ -52,7 +53,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 - 🎮 **Gamepads** (Xbox, DualShock / DualSense and others through SDL3), up to 4 local players, with rumble.
 - ⌨️ **Keyboard and mouse** with mouse attacks and the fairy pointer on the mouse, all rebindable.
 - 🔄 **Dynamic button prompts.** On-screen prompts switch between PlayStation buttons and your keyboard / mouse keys, following whichever you used last, and show your own bindings.
-- 💾 **PS4-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4 progress over and take it back.
+- 💾 **PS4/PS5-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4/PS5 progress over and take it back.
 - 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with room codes and friend codes.
 - ⏭️ **Optional story and tutorial skip** on new characters (details [below](#what-is-changed-in-the-game)).
 - 🪟 **Launcher** for your dump, saves, controls, display, online settings and bug reports.
@@ -84,10 +85,10 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 
 ## Your dump
 
-OpenCrown needs the game's files from **a PS4 you own**: the **decrypted** `eboot.bin` together with the rest of the game folder (the files the game reads at run time and the `sce_sys` folder).
+OpenCrown needs the game's files from **a PS4 or PS5 you own**: the **decrypted** `eboot.bin` together with the rest of the game folder (the files the game reads at run time and the `sce_sys` folder).
 
 > [!WARNING]
-> **PKG files won't work.** A PKG from the PS4 or the PlayStation Store is encrypted. OpenCrown can't decrypt it, and it never will. It also won't help you get the game any other way. Dump the copy you own with the usual homebrew tools for your console.
+> **PKG files won't work.** A PKG from the PS4/PS5 or the PlayStation Store is encrypted. OpenCrown can't decrypt it, and it never will. It also won't help you get the game any other way. Dump the copy you own with the usual homebrew tools for your console.
 
 Your dump is only ever **read**. OpenCrown never writes to it or modifies it; the small patches described below (34 bytes in total) are applied in memory each time you play.
 
@@ -112,7 +113,7 @@ The launcher is a small window with a sidebar. Once your dump is set, it uses th
 | **Controls** | Rebind every keyboard and mouse action and adjust the fairy pointer speed. Saved to `input.ini`, which you can also edit by hand. Delete it to restore the defaults. |
 | **Display** | Windowed or borderless fullscreen, window size, and **4K rendering** (PS4 Pro mode). |
 | **Online** | Your online name, your **friend code**, adding friends by code, incoming and outgoing friend requests, UPnP, a connection test and the lobby server address. |
-| **Save Folder** | Where your saves live. Point it at a folder with a `SAVEDATA00` from your PS4 to keep playing your console progress. |
+| **Save Folder** | Where your saves live. Point it at a folder with a `SAVEDATA00` from your PS4/PS5 to keep playing your console progress. |
 | **Report a Bug** | Sends a short note plus the end of your last log, so problems can be fixed. You can **preview** exactly what is sent first. See [Privacy](#privacy). |
 
 Launcher settings are stored in `launcher.ini` next to your saves and logs.
@@ -179,14 +180,14 @@ Online play uses **the game's own matchmaking and netcode**. The lobby server on
 2. **Handshake.** The server swaps the players' network addresses so they can reach each other.
 3. **Peer to peer.** The players connect **directly** over UDP. All gameplay traffic goes between the players, never through the server. NAT traversal uses STUN and hole punching, plus UPnP if your router allows it.
 
-**Bones** (the ally records you find in the catacombs and resurrect at the temple) are swapped by the game itself over that same peer connection when a stage starts, just like on PS4. There's no central bones database.
+**Bones** (the ally records you find in the catacombs and resurrect at the temple) are swapped by the game itself over that same peer connection when a stage starts, just like on PS4/PS5. There's no central bones database.
 
 The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-worker`](server/lobby-worker). Anyone can run their own and point the **Online** page at it.
 
 **Friends:** each player has a friend code like `ABCD-1234`. Add someone by their code on the **Online** page. Once they accept, you can see when they're online and use *Join Friend's Room* in the game.
 
 > [!NOTE]
-> Online play unlocks at the same point in the story as on PS4. Taking the story skip on a new character gets you there right away.
+> Online play unlocks at the same point in the story as on PS4/PS5. Taking the story skip on a new character gets you there right away.
 
 ## Privacy
 
@@ -256,13 +257,13 @@ No. Please buy the game and dump your own copy. This project won't link to, host
 </details>
 
 <details>
-<summary><b>Can I play online with people on a real PS4?</b></summary>
+<summary><b>Can I play online with people on a real PS4/PS5?</b></summary>
 
 No. OpenCrown players play with each other through the OpenCrown lobby. PlayStation Network isn't involved.
 </details>
 
 <details>
-<summary><b>Will my PS4 save work?</b></summary>
+<summary><b>Will my PS4/PS5 save work?</b></summary>
 
 Yes. Copy your `SAVEDATA00` folder into the save folder. The format is identical, and it works the other way round too.
 </details>

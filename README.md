@@ -183,10 +183,6 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 > [!NOTE]
 > Online play unlocks at the same point in the story as on PS4. Taking the story skip on a new character gets you there right away.
 
-### Help wanted: netcode and hosting 🙋
-
-The online side currently runs on a small free-tier server, and honestly I'm not sure how long that setup will hold up if more people start playing. If you know your way around **netcode, NAT traversal or relay servers**, or you'd be up for helping with **longer-term server hosting** (or just have ideas for a sturdier setup), I'd love to hear from you. [Open an issue](https://github.com/Nezara/OpenCrown-PC/issues) and say hi.
-
 ## Privacy
 
 - **The lobby server sees:** your online name, a random account ID, your public IP and port (needed to connect players), your rooms and your friends list. It doesn't see or relay gameplay.
@@ -289,3 +285,11 @@ The programs aren't code-signed (signing certificates cost money), and a program
 ## Legal
 
 *Dragon's Crown* and *Dragon's Crown Pro* are trademarks of their respective owners. OpenCrown PC is an independent, non-commercial fan project. The repository contains no code, art, audio or other data from the game (apart from the screenshots above, shown to illustrate the project), and it requires a legally obtained copy that you dumped yourself. It is not affiliated with or endorsed by Vanillaware, Atlus, SEGA or Sony Interactive Entertainment.
+
+## Help keep the server running
+
+OpenCrown is free and always will be. Donations go **only** toward hosting the online server; there are no perks, rewards or early builds, and everyone gets the same thing whether they donate or not.
+
+<p align="center">
+  <a href="https://ko-fi.com/nezara"><img alt="Support the server on Ko-fi" src="https://img.shields.io/badge/Ko--fi-support%20the%20server-ff5e5b?logo=ko-fi&logoColor=white"></a>
+</p>

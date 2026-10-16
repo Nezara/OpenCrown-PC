@@ -183,6 +183,10 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 > [!NOTE]
 > Online play unlocks at the same point in the story as on PS4. Taking the story skip on a new character gets you there right away.
 
+### Help wanted: netcode and hosting 🙋
+
+The online side currently runs on a small free-tier server, and honestly I'm not sure how long that setup will hold up if more people start playing. If you know your way around **netcode, NAT traversal or relay servers**, or you'd be up for helping with **longer-term server hosting** (or just have ideas for a sturdier setup), I'd love to hear from you. [Open an issue](https://github.com/Nezara/OpenCrown-PC/issues) and say hi.
+
 ## Privacy
 
 - **The lobby server sees:** your online name, a random account ID, your public IP and port (needed to connect players), your rooms and your friends list. It doesn't see or relay gameplay.

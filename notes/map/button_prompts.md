@@ -33,6 +33,6 @@ $DCP_PROMPT_FONT), mouse icon for Mouse1-3; nothing third-party vendored.
 Labels: first input of the action in input.ini (`prompt_bindings`, sdl_input.cpp); sticks/d-pad = their 4 keys.
 
 ## 4. Device detection (`DeviceTracker`, tools/dcp_run/sdl_input.cpp)
-KB/M on key down (not F1/F12), mouse button/wheel, or >= 24 px of mouse motion; pad on gamepad button down or
+KB/M on key down (not F1), mouse button/wheel, or >= 24 px of mouse motion; pad on gamepad button down or
 stick > 16000 / trigger > 8000. Starts on KB/M unless a gamepad is plugged in. Scripted runs stay on pad glyphs;
 test hook `DCP_PROMPT_EVENTS=990=key,1020=pad` feeds synthetic SDL events through the same tracker.

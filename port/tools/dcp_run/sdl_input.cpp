@@ -319,7 +319,7 @@ void DeviceTracker::on_event(const SDL_Event& e) {
     constexpr int kStick = 16000;      // stick deadzone (of 32767); triggers count past half that
     switch (e.type) {
     case SDL_EVENT_KEY_DOWN:
-        if (e.key.scancode == SDL_SCANCODE_F1 || e.key.scancode == SDL_SCANCODE_F12) break;  // debug keys
+        if (e.key.scancode == SDL_SCANCODE_F1) break;  // stats key
         kbm_ = true;
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:

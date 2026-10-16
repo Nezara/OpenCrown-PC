@@ -130,7 +130,7 @@ Gamepads work out of the box with the PS4 layout. Keyboard and mouse defaults ar
 
 **Button prompts follow you:** the game's on-screen prompts ("Press ✕", "Press TOUCHPAD to open Town Map" and so on) show PlayStation buttons while you use a gamepad. As soon as you touch the keyboard or mouse they switch to key caps and mouse icons labelled with your current bindings, and they switch back when you pick the pad up again. The key and mouse icons are OpenCrown's own drawings; the renderer swaps them in for the game's button sprites.
 
-**Handy extras:** **F1** shows performance stats, and **F12** saves a screenshot.
+**Handy extra:** **F1** shows performance stats in the window title.
 
 ## Saves
 
@@ -198,7 +198,7 @@ This is a 1.0 from a hobby project, so expect a few rough edges:
 - **Very strict networks** (some mobile or carrier-grade NAT connections) can stop the direct connection. There's no relay server yet.
 - **Friend status** can take about 10 seconds to update.
 - **Windows user names with non-English characters** (e.g. `C:\Users\Jürgen`) can break file paths. Choosing a save folder with a plain path works around it.
-- **Odd or unusual text can appear briefly on scene transitions.** The PS4's system text library isn't included, so some of the text it would supply has to be swapped for generic stand-in text. Most of these cases have been caught and fixed, but a few outliers may still slip through. If you spot one, a bug report with a screenshot (F12) helps.
+- **Odd or unusual text can appear briefly on scene transitions.** The PS4's system text library isn't included, so some of the text it would supply has to be swapped for generic stand-in text. Most of these cases have been caught and fixed, but a few outliers may still slip through. If you spot one, a bug report saying where it happened helps.
 - The programs **aren't code-signed**, so SmartScreen and some antivirus tools may be suspicious at first.
 
 Found something else? Use the launcher's **Report a Bug** page or [open an issue](https://github.com/Nezara/OpenCrown-PC/issues).

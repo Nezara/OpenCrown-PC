@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" width="960" height="380" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7a8aa0"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#c08a2a"/>
+    </marker>
+  </defs>
+  <rect width="960" height="380" rx="14" fill="#f2f5fa" stroke="#d4dbe6"/>
+  <text x="30" y="40" font-size="20" font-weight="600" fill="#1a2a3a">How online play connects</text>
+
+  <!-- server -->
+  <rect x="355" y="62" width="250" height="86" rx="12" fill="#ffffff" stroke="#7a8aa0" stroke-width="2" stroke-dasharray="6 4"/>
+  <text x="480" y="94" text-anchor="middle" font-size="16" font-weight="600" fill="#2a3a5a">Lobby server</text>
+  <text x="480" y="116" text-anchor="middle" font-size="12.5" fill="#4a5a7a">rooms, join codes, friend codes,</text>
+  <text x="480" y="134" text-anchor="middle" font-size="12.5" fill="#4a5a7a">swaps addresses. No gameplay.</text>
+
+  <!-- players -->
+  <rect x="60" y="215" width="210" height="100" rx="12" fill="#fbecc8" stroke="#c08a2a" stroke-width="2.5"/>
+  <text x="165" y="250" text-anchor="middle" font-size="16" font-weight="700" fill="#5a3a0a">Player A (host)</text>
+  <text x="165" y="274" text-anchor="middle" font-size="12.5" fill="#6a4a1a">the game's own</text>
+  <text x="165" y="292" text-anchor="middle" font-size="12.5" fill="#6a4a1a">matchmaking + netcode</text>
+
+  <rect x="690" y="215" width="210" height="100" rx="12" fill="#fbecc8" stroke="#c08a2a" stroke-width="2.5"/>
+  <text x="795" y="250" text-anchor="middle" font-size="16" font-weight="700" fill="#5a3a0a">Player B (joins)</text>
+  <text x="795" y="274" text-anchor="middle" font-size="12.5" fill="#6a4a1a">the game's own</text>
+  <text x="795" y="292" text-anchor="middle" font-size="12.5" fill="#6a4a1a">matchmaking + netcode</text>
+
+  <!-- handshake arrows -->
+  <path d="M200 212 L370 152" stroke="#7a8aa0" stroke-width="2" marker-start="url(#a)" marker-end="url(#a)"/>
+  <path d="M760 212 L590 152" stroke="#7a8aa0" stroke-width="2" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text x="300" y="142" text-anchor="end" font-size="12" fill="#4a5a7a">① host / join a room</text>
+  <text x="660" y="142" font-size="12" fill="#4a5a7a">② addresses swapped</text>
+
+  <!-- p2p -->
+  <path d="M274 265 L686 265" stroke="#c08a2a" stroke-width="4" marker-start="url(#g)" marker-end="url(#g)"/>
+  <text x="480" y="254" text-anchor="middle" font-size="13" font-weight="600" fill="#7a4a0a">③ direct peer-to-peer UDP</text>
+  <text x="480" y="288" text-anchor="middle" font-size="12" fill="#7a5a2a">gameplay and bones (ally records)</text>
+  <text x="480" y="305" text-anchor="middle" font-size="12" fill="#7a5a2a">STUN · hole punching · UPnP</text>
+
+  <text x="30" y="355" font-size="12.5" fill="#4a5a6a">After step ②, the server is out of the picture. Up to 4 players, the same way the PS4 version plays online.</text>
+</svg>

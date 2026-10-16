@@ -1,0 +1,21 @@
+{
+  "name": "dcp-lobby-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dragon's Crown Pro PC port: community lobby (introductions only) as a Cloudflare Worker + Durable Object",
+  "scripts": {
+    "dev": "wrangler dev --local --ip 127.0.0.1 --port 8787",
+    "dev:tls": "wrangler dev --local --ip 127.0.0.1 --port 8788 --local-protocol https",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.2",
+    "@cloudflare/workers-types": "5.20261015.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.151.0"
+  }
+}

@@ -1,6 +1,6 @@
 <h1 align="center">OpenCrown PC</h1>
 
-<p align="center"><i>Dragon's Crown Pro Multiplayer, running natively on Windows</i></p>
+<p align="center"><i>Dragon's Crown Pro Multiplayer Port, running natively on Windows</i></p>
 
 <p align="center">
   <img src="docs/img/hero.jpg" alt="The Fighter in the Ancient Temple ruins, running in OpenCrown PC" width="100%">

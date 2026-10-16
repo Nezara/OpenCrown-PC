@@ -1,0 +1,178 @@
+// Story / tutorial skip questions, see skip_offers.h and notes/map/story_progress.md for the asm evidence.
+//
+// Story skip, FUN_003adbf0 (creation screen) state 1 on confirm (asm 0x3aed82..0x3aedb2):
+//   cmp byte [r13+0xf8da], 0 ; je ->state 8     (0xf8da = new hero, or an edited hero with story counter <= 2)
+//   and ... (six "class k cleared" header bytes all <= 0) ; jne ->state 8     <- NOPed
+//   edx = 9 (the skip offer; "yes" runs the game's own writes, 0x3ae3cb..0x3ae5eb)
+// Tutorial skip, FUN_003a69e0 state 3 (asm 0x3a8ac9..):
+//   call FUN_00477f80 (story counter > 0 or file tutorial mark slot+0x48) ; test al, al ; je 0x3a9025   <- NOPed
+//   0x3a9025 is the auto-start path (wait ~3 s, then round/Tutorial.brb); the fall-through builds dialog 0x5d8,
+//   whose "no" writes hero+0x103 = 1 (0x3a90dc) and goes to town. The state is only entered while hero+0x103 == 0.
+//
+// No-skip warning (story_progress.md 9; with the story skip). Online needs hero+0x6f >= 0x2d (FUN_00086f00), which
+// the skip sets, so the first "no" asks again with a warning; the second answer is final. State 9 of FUN_003adbf0:
+//   0x3ae391  mov esi, 0x3cc ... FUN_004ec630 -> FUN_0006b850 -> FUN_00591450 (message id -> UTF-8, vsnprintf'd)
+//   0x3ae3b3 / 0x3ae3bc  je 0x3ae5f0 (answer 0 cancel / 3 no -> state 8)        <- rel32 retargeted to relay B
+//   0x3ae3cb  mov rbx, r15 ; mov esi, 0x2d (first yes instructions)             <- jmp relay Y (+3-byte nop)
+//   0x591450  xor eax, eax ; test esi, esi ; js ret (lookup entry)               <- jmp relay L (+nop)
+// Two flag bytes: [0] text_due (cleared by the one lookup it serves), [1] in_second. Relay B: second answer -> clear,
+// state 8 as before; first -> set both, SetState(kind, 9) (= the 0x3ae5f0 sequence with edx 9), which re-arms the
+// first-frame build, so the next frame shows a fresh dialog whose 0x3cc text is ours. Relay Y clears both. Every
+// relay is plain bytes, checked with capstone (DCP_SKIP_DUMP=1 prints them); no register but rax is touched where
+// rax is dead (the lookup returns in rax; B and Y reload it before use in the original code).
+#include "skip_offers.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <initializer_list>
+
+#include <windows.h>
+
+namespace dcp::skip_offers {
+namespace {
+
+struct Patch {
+    const char* env;
+    const char* what;
+    uint32_t site;
+    uint8_t len;
+    uint8_t expect[6];
+    uint8_t repl[6];
+};
+
+constexpr Patch kPatches[] = {
+    {"DCP_STORY_SKIP", "story skip offered to every new character", 0x3aeda9, 2, {0x75, 0x07}, {0x66, 0x90}},  // jne -> 2-byte nop
+    {"DCP_TUTORIAL_SKIP", "tutorial question asked on the first character too", 0x3a8adb, 6,
+     {0x0f, 0x84, 0x44, 0x05, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00}},  // je rel32 -> 6-byte nop
+};
+
+// The second ask: our text replaces message 0x3cc once. ASCII + '\n' only, no '%' (it is a vsnprintf format).
+constexpr char kWarning[] =
+    "Without the skip, this character can't play online\n"
+    "until the first half of the story is finished.\n"
+    "Skip to the talisman collecting? (Player starts at LV15)";
+
+constexpr uint32_t kLookup = 0x591450, kLookupCont = 0x591456;
+constexpr uint32_t kNoA = 0x3ae3b3, kNoB = 0x3ae3bc, kSetState = 0x3aecd2, kState8 = 0x3ae5f0;
+constexpr uint32_t kYes = 0x3ae3cb, kYesCont = 0x3ae3d3;
+constexpr uint8_t kLookupBytes[] = {0x31, 0xc0, 0x85, 0xf6, 0x78, 0x21};
+constexpr uint8_t kNoABytes[] = {0x0f, 0x84, 0x37, 0x02, 0x00, 0x00}, kNoBBytes[] = {0x0f, 0x84, 0x2e, 0x02, 0x00, 0x00};
+constexpr uint8_t kYesBytes[] = {0x4c, 0x89, 0xfb, 0xbe, 0x2d, 0x00, 0x00, 0x00};
+
+bool off(const char* env) {
+    const char* v = std::getenv(env);
+    return v && std::strcmp(v, "0") == 0;
+}
+
+void write_code(uint8_t* at, const uint8_t* bytes, size_t n) {
+    DWORD old;
+    VirtualProtect(at, n, PAGE_EXECUTE_READWRITE, &old);
+    std::memcpy(at, bytes, n);
+    VirtualProtect(at, n, old, &old);
+    FlushInstructionCache(GetCurrentProcess(), at, n);
+}
+
+uint8_t* alloc_near(uint64_t from, size_t size) {
+    for (uint64_t a = (from + 0xffff) & ~0xffffull; a < from + (1ull << 30); a += 0x10000)
+        if (void* p = VirtualAlloc(reinterpret_cast<void*>(a), size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE))
+            return static_cast<uint8_t*>(p);
+    return nullptr;
+}
+
+struct Emit {
+    uint8_t* p;
+    void b(std::initializer_list<uint8_t> v) { for (uint8_t x : v) *p++ = x; }
+    void q(uint64_t v) { std::memcpy(p, &v, 8), p += 8; }
+    void jmp_abs(uint64_t to) { b({0xff, 0x25, 0, 0, 0, 0}), q(to); }  // jmp [rip+0]
+};
+
+bool fits_rel32(const uint8_t* to, const uint8_t* next) {
+    int64_t r = int64_t(to - next);
+    return r == int32_t(r);
+}
+
+void put_rel32(uint8_t* bytes, const uint8_t* to, const uint8_t* next) {
+    int32_t r = int32_t(to - next);
+    std::memcpy(bytes, &r, 4);
+}
+
+void install_warning(uint8_t* base) {
+    uint8_t *lookup = base + kLookup, *no_a = base + kNoA, *no_b = base + kNoB, *yes = base + kYes;
+    if (std::memcmp(lookup, kLookupBytes, sizeof kLookupBytes) || std::memcmp(no_a, kNoABytes, sizeof kNoABytes) ||
+        std::memcmp(no_b, kNoBBytes, sizeof kNoBBytes) || std::memcmp(yes, kYesBytes, sizeof kYesBytes)) {
+        std::fprintf(stderr, "skip_offers: unexpected bytes at the warning sites; no-skip warning not installed\n");
+        return;
+    }
+    uint8_t* page = alloc_near(reinterpret_cast<uint64_t>(base) + 0x1200000, 0x1000);
+    if (!page) { std::fprintf(stderr, "skip_offers: no relay memory near the image; no warning\n"); return; }
+    const uint64_t b64 = reinterpret_cast<uint64_t>(base);
+    uint8_t* flags = page;            // [0] text_due, [1] in_second
+    char* text = reinterpret_cast<char*>(page + 0x10);
+    std::memcpy(text, kWarning, sizeof kWarning);
+    uint8_t *L = page + 0x100, *B = page + 0x180, *Y = page + 0x200;
+    const uint64_t f64 = reinterpret_cast<uint64_t>(flags);
+
+    Emit e{L};  // lookup: if (id == 0x3cc && text_due) { text_due = 0; return text; } else original entry
+    e.b({0x81, 0xfe, 0xcc, 0x03, 0x00, 0x00, 0x75, 0x1d, 0x48, 0xb8}), e.q(f64);  // cmp esi,0x3cc; jne orig; mov rax,flags
+    e.b({0x80, 0x38, 0x00, 0x74, 0x0e, 0xc6, 0x00, 0x00, 0x48, 0xb8});             // cmp [rax],0; je orig; mov [rax],0
+    e.q(reinterpret_cast<uint64_t>(text)), e.b({0xc3});                          // mov rax,text; ret
+    e.b({0x31, 0xc0, 0x85, 0xf6, 0x79, 0x01, 0xc3}), e.jmp_abs(b64 + kLookupCont);  // orig: xor; test; jns +1; ret
+    const size_t nl = e.p - L;
+
+    e.p = B;  // a "no": second -> final (state 8); first -> both flags, SetState(kind, 9)
+    e.b({0x48, 0xb8}), e.q(f64);
+    e.b({0x80, 0x78, 0x01, 0x00, 0x75, 0x22, 0x66, 0xc7, 0x00, 0x01, 0x01});  // cmp [rax+1],0; jne final; mov word [rax],0x101
+    e.b({0x49, 0x8b, 0x45, 0x00, 0xba, 0x09, 0x00, 0x00, 0x00, 0x4c, 0x89, 0xef, 0x44, 0x89, 0xe6});  // rax=[r13] edx=9 rdi esi
+    e.jmp_abs(b64 + kSetState);
+    e.b({0xc6, 0x40, 0x01, 0x00}), e.jmp_abs(b64 + kState8);                    // final: mov [rax+1],0
+    const size_t nb = e.p - B;
+
+    e.p = Y;  // a "yes": clear both, replay mov rbx,r15 ; mov esi,0x2d
+    e.b({0x48, 0xb8}), e.q(f64);
+    e.b({0x66, 0xc7, 0x00, 0x00, 0x00, 0x4c, 0x89, 0xfb, 0xbe, 0x2d, 0x00, 0x00, 0x00});
+    e.jmp_abs(b64 + kYesCont);
+    const size_t ny = e.p - Y;
+    FlushInstructionCache(GetCurrentProcess(), page, 0x1000);
+
+    if (!fits_rel32(L, lookup + 5) || !fits_rel32(B, no_a + 6) || !fits_rel32(B, no_b + 6) || !fits_rel32(Y, yes + 5)) {
+        std::fprintf(stderr, "skip_offers: relay out of rel32 range; no warning\n");
+        return;
+    }
+    if (const char* d = std::getenv("DCP_SKIP_DUMP"); d && *d && *d != '0') {
+        auto hex = [](const char* n, const uint8_t* p, size_t len) {
+            std::fprintf(stderr, "skip_offers: relay %s ", n);
+            for (size_t i = 0; i < len; ++i) std::fprintf(stderr, "%02x", p[i]);
+            std::fprintf(stderr, "\n");
+        };
+        hex("L", L, nl), hex("B", B, nb), hex("Y", Y, ny);
+    }
+    uint8_t j5[6] = {0xe9, 0, 0, 0, 0, 0x90};
+    put_rel32(j5 + 1, L, lookup + 5);
+    write_code(lookup, j5, 6);
+    uint8_t ja[6] = {0x0f, 0x84}, jb[6] = {0x0f, 0x84};
+    put_rel32(ja + 2, B, no_a + 6), put_rel32(jb + 2, B, no_b + 6);
+    write_code(no_a, ja, 6), write_code(no_b, jb, 6);
+    uint8_t jy[8] = {0xe9, 0, 0, 0, 0, 0x0f, 0x1f, 0x00};
+    put_rel32(jy + 1, Y, yes + 5);
+    write_code(yes, jy, 8);
+    std::fprintf(stderr, "skip_offers: the first \"no\" to the story skip warns and asks again\n");
+}
+
+}  // namespace
+
+void install(uint8_t* base) {
+    for (const Patch& p : kPatches) {
+        if (off(p.env)) continue;  // off: game code untouched
+        uint8_t* at = base + p.site;
+        if (std::memcmp(at, p.expect, p.len) != 0) {
+            std::fprintf(stderr, "skip_offers: unexpected bytes at eboot+0x%x; %s not installed\n", p.site, p.what);
+            continue;
+        }
+        write_code(at, p.repl, p.len);
+        std::fprintf(stderr, "skip_offers: %s (eboot+0x%x)\n", p.what, p.site);
+    }
+    if (!off("DCP_STORY_SKIP") && !off("DCP_SKIP_WARNING")) install_warning(base);
+}
+
+}  // namespace dcp::skip_offers

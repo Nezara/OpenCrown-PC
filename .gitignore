@@ -1,0 +1,23 @@
+# Whitelist: only our own code, tools, plan and notes are versioned. No game bytes, assets, eboot or
+# Ghidra databases ever enter the repo (users supply their own dump).
+/*
+!/.gitignore
+!/README.md
+!/plan/
+!/notes/
+!/port/
+!/server/
+!/Work/
+/Work/*
+!/Work/tools/
+!/Work/ghidra_scripts/
+
+/port/build/
+/port/build*/
+/Work/tools/paths.local.ps1
+*.log
+.env
+/notes/raw/
+__pycache__/
+*.pyc
+dist/

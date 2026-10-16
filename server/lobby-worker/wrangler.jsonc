@@ -1,0 +1,13 @@
+// Dragon's Crown Pro community lobby (notes/map/lobby_protocol.md). Free plan: SQLite-backed Durable Object only.
+// "name" decides the public URL: wss://<name>.<your-workers-subdomain>.workers.dev/
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "opencrown-lobby",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "durable_objects": {
+    "bindings": [{ "name": "LOBBY", "class_name": "Lobby" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Lobby"] }],
+  "observability": { "enabled": false }
+}

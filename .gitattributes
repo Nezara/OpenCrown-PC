@@ -1,0 +1,4 @@
+# Normalise line endings: LF in the repository, native in checkouts.
+* text=auto
+*.jpg binary
+*.png binary

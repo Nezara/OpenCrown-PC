@@ -2,6 +2,7 @@
 # Ghidra databases ever enter the repo (users supply their own dump).
 /*
 !/.gitignore
+!/.gitattributes
 !/README.md
 !/docs/
 !/plan/

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- OpenCrown icon (own artwork): a gold crown on a dark rounded square. -->
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="#1d1a24"/>
+  <path d="M48 176 L40 84 L92 124 L128 64 L164 124 L216 84 L208 176 Z" fill="#e2b34a" stroke="#8a6420" stroke-width="6" stroke-linejoin="round"/>
+  <rect x="48" y="176" width="160" height="28" rx="6" fill="#c9962f" stroke="#8a6420" stroke-width="6"/>
+  <circle cx="40" cy="84" r="11" fill="#e2b34a" stroke="#8a6420" stroke-width="5"/>
+  <circle cx="128" cy="62" r="12" fill="#e2b34a" stroke="#8a6420" stroke-width="5"/>
+  <circle cx="216" cy="84" r="11" fill="#e2b34a" stroke="#8a6420" stroke-width="5"/>
+  <circle cx="128" cy="146" r="14" fill="#b4304a"/>
+  <circle cx="84" cy="156" r="9" fill="#3a7bd5"/>
+  <circle cx="172" cy="156" r="9" fill="#3a7bd5"/>
+</svg>

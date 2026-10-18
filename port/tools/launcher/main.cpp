@@ -11,6 +11,9 @@
 // characters) plus the redacted tail of logs/last_run.log (net/bug_report.h: IPs, ids, user and PC names removed;
 // "Preview" shows exactly what is sent), through the lobby, which rate-limits it.
 // Player name: never the Windows user name - an empty name gets a random "PlayerNNNN" on first start.
+// Update (bottom of the sidebar, update.h): checks GitHub releases at start (setting) and on demand on a worker thread,
+// shows the notes of every newer release, downloads + verifies (size, SHA-256) + installs the zip, then starts the new
+// launcher with --updated <old version> ("Updated to vX" once). DCP_UPDATE_API=<url> points it at a test server.
 // Look: sidebar navigation over the game's own store art (sce_sys/pic0.png background, icon0.png logo), read from the
 // user's dump at run time like everything else (rule 1: nothing from the game ships with us); plain theme without it.
 #include <SDL3/SDL.h>
@@ -42,6 +45,7 @@
 #include "net/friends.h"
 #include "net/identity.h"
 #include "net/online_check.h"
+#include "update.h"
 
 namespace {
 
@@ -101,6 +105,7 @@ struct Settings {
     std::string lobby = kDefaultLobby;
     std::string name;   // online name shown to others: 3..16 of [A-Za-z0-9_-] (net/identity.h online_name)
     bool upnp = true;
+    bool check_updates = true;  // ask GitHub for a newer launcher at start
 };
 
 void load_settings(const std::string& path, Settings& s) {
@@ -121,6 +126,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "lobby") s.lobby = v.empty() ? Settings::kDefaultLobby : v;
         else if (k == "name") s.name = v.substr(0, 16);
         else if (k == "upnp") s.upnp = v == "1" || v == "true";
+        else if (k == "check_updates") s.check_updates = v == "1" || v == "true";
     }
 }
 
@@ -130,7 +136,8 @@ void save_settings(const std::string& path, const Settings& s) {
       << "dump = " << s.dump << "\nsaves = " << s.saves
       << "\nsaves_chosen = " << (s.saves_chosen ? "true" : "false") << "\nuhd = " << (s.uhd ? "true" : "false") << "\nfullscreen = " << (s.fullscreen ? "true" : "false") << "\nwidth = " << s.width
       << "\nheight = " << s.height << "\nlobby = " << s.lobby << "\nname = " << s.name
-      << "\nupnp = " << (s.upnp ? "true" : "false") << "\n";
+      << "\nupnp = " << (s.upnp ? "true" : "false") << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
+      << "\n";
 }
 
 // ---- input.ini model: the action lines of kInputDefaults, in order ----
@@ -424,6 +431,7 @@ void apply_theme(float scale) {
     c[ImGuiCol_SliderGrab] = kGoldDim;
     c[ImGuiCol_SliderGrabActive] = kGold;
     c[ImGuiCol_CheckMark] = kGold;
+    c[ImGuiCol_PlotHistogram] = kGoldDim;  // progress bar (update download)
     c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.2f);
     c[ImGuiCol_ScrollbarGrab] = ImVec4(0.45f, 0.32f, 0.16f, 0.7f);
     c[ImGuiCol_TextSelectedBg] = ImVec4(0.70f, 0.50f, 0.22f, 0.45f);
@@ -607,6 +615,84 @@ struct BugJob {
     }
 };
 
+// Self-update (update.h): the GitHub check, then download + verify + install, on one worker thread at a time; the
+// leftover cleanup of the previous update on another (bounded: it waits at most a few seconds for a locked .old).
+struct UpdateJob {
+    std::mutex mu;
+    bool checking = false, have = false;  // have = a check finished (res is valid)
+    dcp::update::CheckResult res;
+    bool busy = false;        // download / install running
+    bool installing = false;  // past the download: files are being replaced (never abandoned at exit)
+    bool installed = false;   // done: the main loop starts the new launcher
+    bool not_writable = false;
+    std::string error;        // last download / install problem
+    dcp::update::Progress prog;
+    std::thread th, cleanup;
+    ~UpdateJob() {
+        if (th.joinable()) th.join();
+        if (cleanup.joinable()) cleanup.join();
+    }
+    void start_cleanup(const std::string& dir, int wait_ms) {
+        cleanup = std::thread([dir, wait_ms] { dcp::update::cleanup_leftovers(dir, wait_ms); });
+    }
+    void start_check() {
+        if (th.joinable()) th.join();
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            checking = true;
+        }
+        th = std::thread([this] {
+            dcp::update::CheckResult r = dcp::update::check(OPENCROWN_VERSION, dcp::update::windows_pattern());
+            std::lock_guard<std::mutex> lk(mu);
+            res = r, have = true, checking = false;
+        });
+    }
+    // Caller checked: an installable result, the game not running.
+    void start_install() {
+        if (th.joinable()) th.join();
+        if (cleanup.joinable()) cleanup.join();  // it deletes *.part files
+        const std::string dir = dcp::update::exe_dir();
+        dcp::update::Asset a;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            a = res.asset, error.clear(), not_writable = false;
+            if (a.sha256.empty()) {
+                error = "This release has no checksum, so it can't be installed automatically. Use \"Open release "
+                        "page\" and unzip it yourself.";
+                return;
+            }
+            if (!dcp::update::dir_writable(dir)) {
+                not_writable = true;
+                error = "Can't write to the launcher folder (" + dir + "), for example because it is in Program Files. "
+                        "Use \"Open release page\", download the zip and unzip it somewhere you can write to.";
+                return;
+            }
+            busy = true, installing = false;
+        }
+        prog.done = 0, prog.total = a.size, prog.cancel = false;
+        th = std::thread([this, a, dir] {
+            bool test = false;
+            dcp::update::api_url_from_env(&test);
+            const std::string part = dir + "\\" + a.name + ".part";
+            std::string err;
+            bool ok = dcp::update::download_verified(a.url, "OpenCrown-Launcher/" OPENCROWN_VERSION, test, part, a.size,
+                                                     a.sha256, &prog, &err);
+            if (ok) {
+                {
+                    std::lock_guard<std::mutex> lk(mu);  // the exit path sets cancel, then reads installing
+                    if (prog.cancel) ok = false, err = "cancelled";
+                    else installing = true;
+                }
+                if (ok) ok = dcp::update::install_zip(part, dir, &err);
+                DeleteFileW(widen(part).c_str());
+            }
+            if (!err.empty()) err[0] = char(std::toupper(static_cast<unsigned char>(err[0])));
+            std::lock_guard<std::mutex> lk(mu);
+            busy = installing = false, installed = ok, error = ok ? "" : err;
+        });
+    }
+};
+
 const ImVec4 kGood(0.55f, 0.85f, 0.45f, 1), kBad(0.97f, 0.45f, 0.38f, 1), kWarn(0.98f, 0.62f, 0.30f, 1),
     kDim(0.66f, 0.62f, 0.55f, 1);
 
@@ -767,9 +853,14 @@ void draw_friend_lists(const dcp::net::FriendsState& L, bool busy, Act act, std:
 int main(int argc, char** argv) {
     bool selftest = false;
     std::string first_tab = "Game";  // --tab <name>: open that page first (e.g. --tab Online)
+    std::string updated_from;        // --updated <old version>: started by the updater
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
         else if (std::strcmp(argv[i], "--tab") == 0 && i + 1 < argc) first_tab = argv[++i];
+        else if (std::strcmp(argv[i], "--updated") == 0 && i + 1 < argc) {
+            dcp::update::Version v = dcp::update::parse_version(argv[++i]);
+            if (v.ok) updated_from = dcp::update::to_string(v);
+        }
 
     const std::string user = dcp::user_dir();
     SDL_CreateDirectory((user + "/logs").c_str());  // creates user too
@@ -845,6 +936,14 @@ int main(int argc, char** argv) {
     std::string add_code, confirm_remove;
     BugJob bug;
     std::string bug_text, bug_preview;
+    UpdateJob upd;
+    const std::string updated_msg =
+        updated_from.empty() ? "" : "Updated to v" OPENCROWN_VERSION " (from v" + updated_from + ").";
+    bool upd_launched = false;  // the new launcher was started (or failed to): handled once
+    if (!selftest) {
+        upd.start_cleanup(dcp::update::exe_dir(), updated_from.empty() ? 1500 : 10000);
+        if (set.check_updates) upd.start_check();
+    }
     bool ask_saves = !set.saves_chosen && !selftest;  // first start: where should saves go?
     int capture = -1;      // index into ctl.binds awaiting a key / mouse button
     bool first = true;
@@ -895,6 +994,33 @@ int main(int argc, char** argv) {
             }
         }
         poll_game(game, log_path);
+        {  // update installed: start the new launcher and leave
+            bool done;
+            {
+                std::lock_guard<std::mutex> lk(upd.mu);
+                done = upd.installed && !upd_launched;
+            }
+            if (done) {
+                upd_launched = true;
+                save_settings(settings_path, set);
+                std::string err;
+                if (dcp::update::relaunch(dcp::update::exe_dir(), OPENCROWN_VERSION, &err)) quit = true;
+                else {
+                    std::lock_guard<std::mutex> lk(upd.mu);
+                    upd.error = err;
+                }
+            }
+        }
+        // Snapshot of the update state for this frame (sidebar, Update page, Play bar).
+        bool u_checking, u_have, u_busy, u_installing, u_not_writable;
+        dcp::update::CheckResult u_res;
+        std::string u_error;
+        {
+            std::lock_guard<std::mutex> lk(upd.mu);
+            u_checking = upd.checking, u_have = upd.have, u_busy = upd.busy, u_installing = upd.installing;
+            u_not_writable = upd.not_writable, u_error = upd.error;
+            if (u_have) u_res = upd.res;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -906,10 +1032,10 @@ int main(int argc, char** argv) {
         ImGui::Begin("##main", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
                                             ImGuiWindowFlags_NoBackground);
-        const char* names[] = {"Game", "Controls", "Display", "Online", "Save Folder", "Report a Bug"};
-        const int order[] = {0, 4, 1, 2, 3, 5};  // sidebar order; indexes names
+        const char* names[] = {"Game", "Controls", "Display", "Online", "Save Folder", "Report a Bug", "Update"};
+        const int order[] = {0, 4, 1, 2, 3, 5};  // sidebar order; indexes names (Update sits at the bottom)
         if (first)
-            for (int t = 0; t < 6; ++t)
+            for (int t = 0; t < 7; ++t)
                 if (_stricmp(names[t], first_tab.c_str()) == 0) page = t;
 
         // Sidebar: logo, navigation, readiness.
@@ -946,7 +1072,41 @@ int main(int argc, char** argv) {
                                                               ImVec2(p.x + 3 * scale, p.y + ImGui::GetItemRectSize().y - 4 * scale),
                                                               IM_COL32(235, 184, 97, 255), 2 * scale);
             }
+            // Update entry, its state and the version, pinned to the bottom-left of the sidebar.
+            const float item_h = ImGui::GetTextLineHeight() + 12 * scale;  // nav font
             if (font_nav) ImGui::PopFont();
+            const ImGuiStyle& st = ImGui::GetStyle();
+            const float block_h = item_h + st.ItemSpacing.y * 2 + ImGui::GetTextLineHeight() * 2;
+            const float bottom_y = ImGui::GetWindowHeight() - st.WindowPadding.y - block_h;
+            if (bottom_y > ImGui::GetCursorPosY()) ImGui::SetCursorPosY(bottom_y);
+            const bool avail = u_have && u_res.ok && u_res.installable;
+            {
+                if (font_nav) ImGui::PushFont(font_nav);
+                const bool sel = page == 6;
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                ImGui::PushStyleColor(ImGuiCol_Text, sel || avail ? kGold : kParchment);
+                if (ImGui::Selectable("   Update##nav", sel, 0, ImVec2(0, item_h))) page = 6;
+                ImGui::PopStyleColor();
+                const ImVec2 sz = ImGui::GetItemRectSize();
+                if (sel)
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + 4 * scale),
+                                                              ImVec2(p.x + 3 * scale, p.y + sz.y - 4 * scale),
+                                                              IM_COL32(235, 184, 97, 255), 2 * scale);
+                if (avail || u_busy) {  // dot badge after the label
+                    const float tx = p.x + ImGui::CalcTextSize("   Update").x + 10 * scale;
+                    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(tx, p.y + sz.y * 0.5f), 4.5f * scale,
+                                                                IM_COL32(235, 184, 97, 255));
+                }
+                if (font_nav) ImGui::PopFont();
+            }
+            if (u_busy) ImGui::TextColored(kGold, "%s", u_installing ? "Installing update..." : "Downloading update...");
+            else if (u_checking) ImGui::TextColored(kDim, "Checking for updates...");
+            else if (!u_have) ImGui::TextColored(kDim, "Updates not checked");
+            else if (!u_res.ok) ImGui::TextColored(kDim, "Update check failed");
+            else if (u_res.installable) ImGui::TextColored(kGold, "Update available: v%s", dcp::update::to_string(u_res.target.ver).c_str());
+            else if (u_res.newer) ImGui::TextColored(kDim, "v%s is out", u_res.latest.c_str());
+            else ImGui::TextColored(kDim, "Up to date (v" OPENCROWN_VERSION ")");
+            ImGui::TextColored(kDim, "v" OPENCROWN_VERSION);
         }
         ImGui::EndChild();
         ImGui::SameLine(0, 14 * scale);
@@ -1208,6 +1368,84 @@ int main(int argc, char** argv) {
                 }
                 if (have_log && ImGui::Button("Open log##bug")) open_in_explorer(log_path);
                 if (!ident.ok) ImGui::TextColored(kBad, "No online identity: %s", ident.error.c_str());
+            } else if (t == 6) {
+                using dcp::update::NoteLine;
+                const bool ok = u_have && u_res.ok;
+                if (!updated_msg.empty()) ImGui::TextColored(kGood, "%s", updated_msg.c_str());
+                ImGui::Text("Installed version:  v" OPENCROWN_VERSION);
+                ImGui::Text("Latest version:");
+                ImGui::SameLine();
+                if (u_checking) ImGui::TextColored(kDim, "checking...");
+                else if (ok && !u_res.latest.empty()) ImGui::Text("v%s", u_res.latest.c_str());
+                else ImGui::TextColored(kDim, "unknown");
+                if (u_checking) ImGui::TextColored(kDim, "Checking GitHub for updates...");
+                else if (!u_have) ImGui::TextColored(kDim, "Not checked yet.");
+                else if (!u_res.ok) ImGui::TextColored(kBad, "Update check failed: %s", u_res.error.c_str());
+                else if (u_res.installable)
+                    ImGui::TextColored(kGold, "Update available: v%s", dcp::update::to_string(u_res.target.ver).c_str());
+                else if (u_res.newer)
+                    ImGui::TextColored(kWarn, "v%s is out, but has no Windows download yet.", u_res.latest.c_str());
+                else ImGui::TextColored(kGood, "You have the latest version.");
+                ImGui::Spacing();
+                const bool running = game.proc != nullptr;
+                ImGui::BeginDisabled(!ok || !u_res.installable || u_busy || u_checking || running);
+                if (ImGui::Button("Download and install")) upd.start_install();
+                ImGui::EndDisabled();
+                if (running && ok && u_res.installable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Close the game first.");
+                ImGui::SameLine();
+                ImGui::BeginDisabled(u_busy || u_checking);
+                if (ImGui::Button("Check again")) upd.start_check();
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Open release page")) {
+                    std::string url = ok && u_res.installable ? u_res.target.html_url : ok ? u_res.latest_url : "";
+                    if (!dcp::update::url_allowed(url, false)) url = dcp::update::kReleasesPage;
+                    ShellExecuteW(nullptr, L"open", widen(url).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                }
+                if (running && ok && u_res.installable) ImGui::TextColored(kWarn, "Close the game to install the update.");
+                if (u_busy) {
+                    const double mb = 1024.0 * 1024.0, done = double(upd.prog.done.load()), total = double(upd.prog.total.load());
+                    char lbl[64];
+                    if (u_installing) std::snprintf(lbl, sizeof lbl, "Installing...");
+                    else std::snprintf(lbl, sizeof lbl, "%.1f MB / %.1f MB", done / mb, total / mb);
+                    ImGui::ProgressBar(u_installing ? 1.0f : total > 0 ? float(done / total) : 0.0f, ImVec2(-FLT_MIN, 0), lbl);
+                }
+                if (!u_error.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, kBad);
+                    ImGui::TextWrapped("%s", u_error.c_str());
+                    ImGui::PopStyleColor();
+                }
+                if (u_not_writable) ImGui::TextColored(kDim, "Your settings and saves are not affected.");
+                if (ImGui::Checkbox("Check for updates when the launcher starts", &set.check_updates))
+                    save_settings(settings_path, set);
+                ImGui::Spacing();
+                ImGui::SeparatorText("What's new");
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0.25f));
+                ImGui::BeginChild("##notes", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+                ImGui::PopStyleColor();
+                if (!ok || u_res.notes.empty())
+                    ImGui::TextColored(kDim, "%s", ok ? "No newer releases." : "Release notes appear here after a check.");
+                for (const NoteLine& l : ok ? u_res.notes : std::vector<NoteLine>{}) {
+                    const float ind = float(l.indent) * 16 * scale;
+                    switch (l.kind) {
+                    case NoteLine::Release:
+                        if (font_nav) ImGui::PushFont(font_nav);
+                        ImGui::TextColored(kGold, "%s", l.text.c_str());
+                        if (font_nav) ImGui::PopFont();
+                        break;
+                    case NoteLine::Heading: ImGui::TextColored(kGoldDim, "%s", l.text.c_str()); break;
+                    case NoteLine::Blank: ImGui::Spacing(); break;
+                    case NoteLine::Bullet:
+                    case NoteLine::Text:
+                        if (ind > 0) ImGui::Indent(ind);
+                        if (l.kind == NoteLine::Bullet) ImGui::Bullet();
+                        ImGui::TextWrapped("%s", l.text.c_str());
+                        if (ind > 0) ImGui::Unindent(ind);
+                        break;
+                    }
+                }
+                ImGui::EndChild();
             }
         }
         ImGui::EndChild();
@@ -1217,7 +1455,7 @@ int main(int argc, char** argv) {
         ImGui::BeginChild("##bar", ImVec2(0, bar_h), ImGuiChildFlags_AlwaysUseWindowPadding);
         ImGui::PopStyleColor();
         {
-            bool running = game.proc != nullptr, can_play = dump_ok(checks) && !running;
+            bool running = game.proc != nullptr, can_play = dump_ok(checks) && !running && !u_busy;
             const ImVec2 play(170 * scale, ImGui::GetFrameHeight() * 1.6f);
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (play.y - ImGui::GetTextLineHeight()) * 0.5f);
             if (running) ImGui::TextColored(kGood, "The game is running.");
@@ -1227,7 +1465,9 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().FramePadding.y);
                 if (ImGui::SmallButton("Show log")) ImGui::OpenPopup("Last run log");
-            } else if (!dump_ok(checks)) ImGui::TextColored(kWarn, "Select a complete dump folder on the Game page.");
+            } else if (u_busy) ImGui::TextColored(kGold, "Updating the launcher...");
+            else if (!dump_ok(checks)) ImGui::TextColored(kWarn, "Select a complete dump folder on the Game page.");
+            else if (!updated_msg.empty()) ImGui::TextColored(kGood, "%s", updated_msg.c_str());
             else ImGui::TextColored(kDim, "Ready to play.");
             ImGui::SameLine(ImGui::GetContentRegionMax().x - play.x);
             ImGui::SetCursorPosY(ImGui::GetStyle().WindowPadding.y);
@@ -1337,7 +1577,16 @@ int main(int argc, char** argv) {
         std::lock_guard<std::mutex> lk(job.mu);
         return job.running;
     };
-    if (busy(conn) || busy(friends) || busy(bug)) {
+    // An update download is abandoned (its .part is removed on the next start); replacing files is always finished.
+    upd.prog.cancel = true;
+    bool upd_busy;
+    {
+        std::lock_guard<std::mutex> lk(upd.mu);
+        upd_busy = upd.checking || (upd.busy && !upd.installing);
+    }
+    if (!upd_busy && upd.th.joinable()) upd.th.join();
+    if (upd.cleanup.joinable()) upd.cleanup.join();
+    if (busy(conn) || busy(friends) || busy(bug) || upd_busy) {
         std::fflush(nullptr);
         _exit(0);
     }

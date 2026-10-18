@@ -1,0 +1,13 @@
+OpenCrownPC includes the following third-party software. Full license texts are in the licenses folder next to this
+file.
+
+- SDL 3.4.18 (zlib license), shipped as SDL3.dll, including its HIDAPI code (BSD-style license) - https://libsdl.org
+- FreeType 2.13.3 (FreeType License, FTL) - portions of this software are copyright (C) The FreeType Project
+  (https://freetype.org). All rights reserved.
+- miniupnpc 2.2.8 (BSD 3-Clause) - Copyright (c) Thomas Bernard - https://miniupnp.tuxfamily.org
+- Dear ImGui 1.91.9b (MIT) - Copyright (c) Omar Cornut - https://github.com/ocornut/imgui
+- MinGW-w64 14.0.0 runtime and winpthreads, statically linked by the compiler (licenses: MinGW-w64-runtime.txt,
+  MinGW-w64-winpthreads.txt) - https://www.mingw-w64.org
+- The GCC runtime libraries (libstdc++, libgcc) are linked under the GCC Runtime Library Exception.
+
+No game files are included. You need your own dump of the game.

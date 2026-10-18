@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
 project(DragonsCrownPort C CXX)
+set(OPENCROWN_VERSION "1.0.1")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
+# Test builds only (updater end-to-end test): -DOPENCROWN_VERSION_OVERRIDE=9.9.9. Never for a release.
+set(OPENCROWN_VERSION_OVERRIDE "" CACHE STRING "Override OPENCROWN_VERSION (updater tests only)")
+if(OPENCROWN_VERSION_OVERRIDE)
+  set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -127,6 +133,10 @@ else()
   message(STATUS "SDL3 not found (set DCP_SDL3_DIR); dcp_viewer skipped")
 endif()
 
+# Launcher self-updater (tools/launcher/update.h): GitHub releases check, verified download, zip install. No SDL.
+add_library(dcp_update STATIC tools/launcher/update.cpp tools/launcher/update_win.cpp)
+target_link_libraries(dcp_update PUBLIC dcp_net winhttp bcrypt)
+
 # End-user launcher (GUI, no console): dump folder, controls (input.ini), display options, starts dcp_run.
 # Dear ImGui (MIT) fetched at configure time; offline: -DFETCHCONTENT_SOURCE_DIR_IMGUI=<unpacked imgui source>.
 if(SDL3_FOUND)
@@ -142,10 +152,12 @@ if(SDL3_FOUND)
   target_link_libraries(dcp_imgui PUBLIC SDL3::SDL3 opengl32)
 
   add_executable(DragonsCrownPro WIN32 tools/launcher/main.cpp)
-  target_link_libraries(DragonsCrownPro PRIVATE dcp_imgui dcp_net shell32 windowscodecs ole32 uuid)
+  target_link_libraries(DragonsCrownPro PRIVATE dcp_imgui dcp_net dcp_update shell32 windowscodecs ole32 uuid)
   set_target_properties(DragonsCrownPro PROPERTIES OUTPUT_NAME "OpenCrownPC Launcher")
+  target_compile_definitions(DragonsCrownPro PRIVATE OPENCROWN_VERSION="${OPENCROWN_VERSION}")
   add_custom_command(TARGET DragonsCrownPro POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:SDL3::SDL3> $<TARGET_FILE_DIR:DragonsCrownPro>)
+
 endif()
 
 enable_testing()
@@ -169,3 +181,9 @@ target_link_libraries(dcp_lobby PRIVATE dcp_net)
 add_executable(test_lobby tests/test_lobby.cpp)
 target_link_libraries(test_lobby PRIVATE dcp_net)
 add_test(NAME lobby COMMAND test_lobby)
+add_executable(test_texwatch tests/test_texwatch.cpp)  # concurrent faults on one protected page
+target_link_libraries(test_texwatch PRIVATE dcp_texwatch)
+add_test(NAME texwatch COMMAND test_texwatch)
+add_executable(test_updater tests/test_updater.cpp)  # launcher updater logic + zip install, no network
+target_link_libraries(test_updater PRIVATE dcp_update)
+add_test(NAME updater COMMAND test_updater)

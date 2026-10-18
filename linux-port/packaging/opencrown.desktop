@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OpenCrown
+Comment=Play your own Dragon's Crown Pro PS4/PS5 dump on PC (no game files included)
+Exec=opencrown-launcher
+Icon=opencrown
+Categories=Game;
+Terminal=false

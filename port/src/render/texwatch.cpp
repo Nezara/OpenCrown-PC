@@ -35,8 +35,16 @@ LONG CALLBACK on_fault(EXCEPTION_POINTERS* e) {
     uint64_t pg = uint64_t(r->ExceptionInformation[1]) / kPage;
     AcquireSRWLockExclusive(&g_lock);
     bool ours = unprotect_locked(pg);
+    bool tracked = !ours && !g_ro.count(pg) && g_write.count(pg);
     ReleaseSRWLockExclusive(&g_lock);
-    return ours ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+    if (ours) return EXCEPTION_CONTINUE_EXECUTION;
+    // Several threads can fault on one page at once: the first handler lifts the protection, the others then find the
+    // page no longer protected by us and only need to retry their store (if it really is writable again now).
+    MEMORY_BASIC_INFORMATION mi;
+    if (tracked && VirtualQuery(reinterpret_cast<void*>(pg * kPage), &mi, sizeof mi) &&
+        (mi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+        return EXCEPTION_CONTINUE_EXECUTION;
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 }  // namespace

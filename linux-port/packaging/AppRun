@@ -1,0 +1,4 @@
+#!/bin/sh
+# AppImage entry: the launcher starts dcp_run from its own folder (usr/bin).
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/opencrown-launcher" "$@"

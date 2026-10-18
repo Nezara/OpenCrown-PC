@@ -2,11 +2,12 @@
 # Ghidra databases ever enter the repo (users supply their own dump).
 /*
 !/.gitignore
+!/.gitattributes
 !/README.md
 !/docs/
-!/plan/
 !/notes/
 !/port/
+!/linux-port/
 !/server/
 !/Work/
 /Work/*
@@ -15,6 +16,8 @@
 
 /port/build/
 /port/build*/
+/linux-port/build*/
+/linux-port/dist/
 /Work/tools/paths.local.ps1
 *.log
 .env

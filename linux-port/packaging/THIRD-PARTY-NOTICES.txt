@@ -1,0 +1,11 @@
+OpenCrown for Linux includes the following third-party software, linked into its programs. Full license texts are
+in the licenses/ folder next to this file.
+
+- SDL 3.4.18 (zlib license), including its HIDAPI code (BSD-style license) - https://libsdl.org
+- FreeType 2.13.3 (FreeType License, FTL) - portions of this software are copyright (C) The FreeType Project
+  (https://freetype.org). All rights reserved.
+- Mbed TLS 3.6.2 (Apache License 2.0) - https://github.com/Mbed-TLS/mbedtls
+- miniupnpc 2.2.8 (BSD 3-Clause) - Copyright (c) Thomas Bernard - https://miniupnp.tuxfamily.org
+- Dear ImGui 1.91.9b (MIT) - Copyright (c) Omar Cornut - https://github.com/ocornut/imgui
+
+No game files are included. You need your own dump of the game.

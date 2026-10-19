@@ -458,6 +458,10 @@ DCP_SYSV int32_t sceNpMatching2ContextStart(uint16_t ctx, uint64_t) {
     if (!g_ctx_created) return kErrNotInit;
     g_start_wanted = true;  // context event goes out from matching2_pump once the lobby answered hello
     if (g_hello_ok && !g_lobby_down) g_ctx_events.push_back({kCtxEvStart, 0});  // restart: link already up
+    // Restart after the link dropped: the lobby client never reconnects within a session and hello was already sent,
+    // so nothing else would answer. Fail the start like an unreachable lobby at launch (the game stays offline);
+    // without it the game waits forever at the next stage load.
+    else if (g_hello_sent && g_lobby_down) g_ctx_events.push_back({kCtxEvStart, LobbyClient::kErrLobbyDown});
     send_hello_locked();
     return kOk;
 }

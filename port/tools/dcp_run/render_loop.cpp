@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "ime_box.h"
 #include "sdl_input.h"
 #include "render/backend.h"
 #include "render/capture.h"
@@ -37,6 +38,9 @@ int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(in
     dcp::render::Backend be;
     if (!be.init()) return 1;
     be.set_prompt_bindings(prompt_bindings(o.input_dir.empty() ? dcp::user_dir() : o.input_dir));
+    // Name entry (sceImeDialog): only drawn with live input; scripted / hidden runs finish it headless (hle/ime.h).
+    ImeBox ime;
+    if (o.window && o.input) ime.init(win, ctx);
     // Button prompts follow the last-used device (DeviceTracker in the live input source). Test hook for scripted runs:
     // DCP_PROMPT_EVENTS=1100=key,1300=pad feeds a synthetic key press (E) / gamepad button (south) at those vblanks
     // through the same tracker code.
@@ -65,13 +69,17 @@ int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(in
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) finish(0);
             if (o.input) o.input->handle_event(e);
+            ime.handle_event(e);
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F1 && !e.key.repeat) {
                 stats = !stats;
                 stat_t0 = SDL_GetTicksNS(), stat_flips = stat_work = stat_draws = 0;
                 if (!stats) SDL_SetWindowTitle(win, kTitle);
             }
         }
-        if (o.input) o.input->update(win);
+        if (o.input) {
+            o.input->set_blocked(ime.blocking());
+            o.input->update(win);
+        }
         if (WaitForSingleObject(static_cast<HANDLE>(game_thread), 0) == WAIT_OBJECT_0) finish(0);
         auto f = dcp::render::take_frame(50);
         if (!f) continue;
@@ -103,6 +111,7 @@ int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(in
             int w, h;
             SDL_GetWindowSizeInPixels(win, &w, &h);
             be.present(w, h);
+            if (o.input) ime.frame(win);
             SDL_GL_SwapWindow(win);
         }
         if (stats) {

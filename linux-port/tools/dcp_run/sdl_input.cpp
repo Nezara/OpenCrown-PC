@@ -17,6 +17,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <atomic>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -113,7 +114,7 @@ public:
     dcp::hle::PadState read(int pad, uint64_t frame) override {
         dcp::hle::PadState s = base_ ? base_->read(pad, frame) : dcp::hle::PadState{};  // scripted base (touch test)
         std::lock_guard<std::mutex> lk(mu_);
-        if (pad < 0 || pad >= 4) return {};
+        if (pad < 0 || pad >= 4 || blocked_) return {};  // blocked: touch screen included
         const dcp::hle::PadState& o = snap_[pad];
         if (!base_) s = o;
         else if (s.buttons |= o.buttons; o.touch_num) {
@@ -158,9 +159,17 @@ public:
             on_finger(e);
     }
     bool kbm_active() const override { return dev_.kbm(); }
+    void set_blocked(bool b) override { blocked_ = b; }
 
     void update(SDL_Window* win) override {
         dcp::hle::PadState s[4];
+        if (blocked_) {
+            if (rel_) SDL_SetWindowRelativeMouseMode(win, false), rel_ = false;
+            std::lock_guard<std::mutex> lk(mu_);
+            for (int i = 0; i < 4; ++i) snap_[i] = s[i];
+            finger_ = false;
+            return;
+        }
         std::vector<SDL_Gamepad*> pads;
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -388,6 +397,7 @@ private:
     float touch_x0_ = 0, touch_y0_ = 0;
     const bool touch_log_ = std::getenv("DCP_TOUCH_LOG") != nullptr;
     bool fairy_on_ = false, toggle_was_ = false, rel_ = false;
+    std::atomic<bool> blocked_{false};  // ImeBox open (set on the render loop, read by the game thread too)
     uint64_t look_ms_ = 0;  // SDL_GetTicks when a look key was last held (pointer_tap window)
     bool finger_ = false, lift_ = false, lift_seen_ = false;  // lift_*: guarded by mu_
     float fx_ = 0, fy_ = 0;

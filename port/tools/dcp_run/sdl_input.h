@@ -26,6 +26,7 @@ public:
     virtual void handle_event(const SDL_Event& e) = 0;
     virtual void update(SDL_Window* win) = 0;
     virtual bool kbm_active() const = 0;  // DeviceTracker state
+    virtual void set_blocked(bool b) = 0;  // true: the game reads idle pads (a text box has the keyboard)
 };
 
 // Loads bindings from <dir>/input.ini (creates dir and writes the defaults if missing). Returns the pump (owned by

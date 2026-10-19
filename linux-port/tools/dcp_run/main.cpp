@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "hle/hle.h"
+#include "hle/ime.h"
 #include "hle/skip_offers.h"
 #include "loader/elf.h"
 #include "loader/hle.h"
@@ -405,6 +406,7 @@ int main(int argc, char** argv) {
         // DCP_TOUCH_TEST (render_loop.cpp): live input also in hidden / scripted runs, on top of the script.
         const bool touch_test = std::getenv("DCP_TOUCH_TEST") != nullptr;
         if (render && ((window && input_path.empty()) || touch_test)) input = install_sdl_input(input_dir, touch_test);
+        if (input && !touch_test) dcp::hle::ime_set_host(true);  // the render loop draws the name-entry box (ime_box.h)
 #endif
         // Own thread so the game gets a large stack (PS4 main thread: guess 8 MiB; 16 MiB here). One mapping with the
         // guard page at the bottom only, so frames > 4 KiB (game code has no stack probes) are fine.

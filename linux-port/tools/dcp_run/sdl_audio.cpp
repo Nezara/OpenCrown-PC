@@ -50,20 +50,29 @@ public:
         uint64_t t0 = SDL_GetTicksNS();
         while (queued > target_) SDL_Delay(1), queued = SDL_GetAudioStreamQueued(s_);
         SDL_PutAudioStreamData(s_, mix_.data(), bytes);
-        if (log_) stat(queued, bytes, SDL_GetTicksNS() - t0);
+        stat(queued, bytes, SDL_GetTicksNS() - t0);
     }
 
 private:
-    // DCP_AUDIO_LOG=1: once a second, batches put, queue depth before each put (min / max, bytes), puts that found
-    // the queue empty (the device had already drained it: an underrun unless at start-up) and time spent waiting.
+    // Once a second: batches put, queue depth before each put (min / max, bytes), puts that found the queue empty (the
+    // device had already drained it: an underrun) and time spent waiting. DCP_AUDIO_LOG=1 prints every second; without
+    // it only seconds with underruns are printed (past start-up; 30 lines, then one a minute), so a bug report's log
+    // says whether a crackle was our feed running dry or something past SDL.
     void stat(int queued, int bytes, uint64_t wait_ns) {
         uint64_t now = SDL_GetTicksNS();
+        if (!start_) start_ = now;
         if (!n_) t0_ = now, qmin_ = queued, qmax_ = queued;
         ++n_, empty_ += queued == 0, wait_ += wait_ns;
         qmin_ = queued < qmin_ ? queued : qmin_, qmax_ = queued > qmax_ ? queued : qmax_;
         if (now - t0_ >= 1000000000ull) {
-            std::fprintf(stderr, "audio: %d batches (%d frames) in %.3f s, queued %d..%d B, empty %d, wait %.1f ms\n", n_,
-                         n_ * bytes / 8, (now - t0_) / 1e9, qmin_, qmax_, empty_, wait_ / 1e6);
+            bool under = empty_ > 0 && now - start_ > 3000000000ull;
+            if (under) ++under_secs_;
+            if (log_ || (under && (under_secs_ <= 30 || now - last_under_log_ >= 60000000000ull))) {
+                std::fprintf(stderr, "audio: %d batches (%d frames) in %.3f s, queued %d..%d B, empty %d, wait %.1f ms%s\n",
+                             n_, n_ * bytes / 8, (now - t0_) / 1e9, qmin_, qmax_, empty_, wait_ / 1e6,
+                             under ? " (underrun)" : "");
+                if (under) last_under_log_ = now;
+            }
             n_ = empty_ = 0, wait_ = 0;
         }
     }
@@ -73,8 +82,8 @@ private:
     bool log_ = std::getenv("DCP_AUDIO_LOG") != nullptr;
     bool tone_ = std::getenv("DCP_AUDIO_TONE") != nullptr;
     uint64_t tone_pos_ = 0;
-    int n_ = 0, empty_ = 0, qmin_ = 0, qmax_ = 0;
-    uint64_t t0_ = 0, wait_ = 0;
+    int n_ = 0, empty_ = 0, qmin_ = 0, qmax_ = 0, under_secs_ = 0;
+    uint64_t t0_ = 0, wait_ = 0, start_ = 0, last_under_log_ = 0;
     int ch_[8] = {};
     std::vector<float> mix_;
 };
@@ -86,6 +95,11 @@ bool install_sdl_audio() {
     // the app name, the stream the stream name (otherwise SDL's generic defaults).
     SDL_SetHint(SDL_HINT_APP_NAME, "Dragon's Crown Pro");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_STREAM_NAME, "Game");
+    // PulseAudio first (on SteamOS / PipeWire systems that is pipewire-pulse, the path Proton's audio takes). SDL's
+    // native PipeWire backend crackled on the Deck OLED and a Steam Machine (bug reports 11, 12, 2026-10-19): it fills
+    // each quantum in PipeWire's real-time thread from the stream our normal-priority mixer thread feeds, and a late
+    // fill is played as a gap. A normal-priority hint, so SDL_AUDIO_DRIVER in the environment still wins.
+    SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "pulseaudio,pipewire,alsa");
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "audio: SDL_InitSubSystem: %s (falling back to silent paced output)\n", SDL_GetError());
         return false;

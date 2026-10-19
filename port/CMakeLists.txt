@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(DragonsCrownPort C CXX)
-set(OPENCROWN_VERSION "1.0.1")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
+set(OPENCROWN_VERSION "1.0.2")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
 # Test builds only (updater end-to-end test): -DOPENCROWN_VERSION_OVERRIDE=9.9.9. Never for a release.
 set(OPENCROWN_VERSION_OVERRIDE "" CACHE STRING "Override OPENCROWN_VERSION (updater tests only)")
 if(OPENCROWN_VERSION_OVERRIDE)
@@ -150,6 +150,9 @@ if(SDL3_FOUND)
   target_include_directories(dcp_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
   target_compile_options(dcp_imgui PRIVATE -w)  # third-party
   target_link_libraries(dcp_imgui PUBLIC SDL3::SDL3 opengl32)
+  # dcp_run's name-entry box (the PS4 keyboard dialog's stand-in).
+  target_sources(dcp_run PRIVATE tools/dcp_run/ime_box.cpp)
+  target_link_libraries(dcp_run PRIVATE dcp_imgui)
 
   add_executable(DragonsCrownPro WIN32 tools/launcher/main.cpp)
   target_link_libraries(DragonsCrownPro PRIVATE dcp_imgui dcp_net dcp_update shell32 windowscodecs ole32 uuid)

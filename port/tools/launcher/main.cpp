@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -37,6 +38,7 @@
 #include <shellapi.h>
 #include <wincodec.h>
 
+#include "../common/game_version.h"
 #include "../common/input_defaults.h"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
@@ -257,7 +259,18 @@ struct Check {
     bool ok;
     bool required;
     std::string text;
+    const char* fail = "[missing]";  // tag when a required check fails
 };
+
+Check version_check(const std::filesystem::path& eboot) {
+    switch (dcp::check_game_version(eboot)) {
+    case dcp::GameVersion::Supported: return {true, true, "Game version: latest patch (1.03)", ""};
+    case dcp::GameVersion::Unsupported:
+        return {false, true, "Not the latest patch (1.03), or another region's copy: update the game on your PS4/PS5 and "
+                             "dump it again", "[wrong version]"};
+    default: return {false, true, "eboot.bin could not be read"};
+    }
+}
 
 std::vector<Check> validate_dump(const std::string& dir) {
     std::vector<Check> out;
@@ -265,6 +278,7 @@ std::vector<Check> validate_dump(const std::string& dir) {
     if (!exists(dir)) return {{false, true, "Folder does not exist."}};
     bool eb = exists(dir + "/eboot.bin");
     out.push_back({eb, true, eb ? "eboot.bin found" : "eboot.bin missing (the decrypted game executable)"});
+    if (eb) out.push_back(version_check(std::filesystem::path(widen(dir + "/eboot.bin"))));
     for (const char* cpk : {"DRACRO.CPK", "DRACRO_US.CPK"}) {
         bool ok = exists(dir + "/" + cpk);
         out.push_back({ok, true, std::string(cpk) + (ok ? " found" : " missing (game data)")});
@@ -1137,12 +1151,12 @@ int main(int argc, char** argv) {
                                              false);
                 ImGui::Spacing();
                 for (const Check& c : checks) {
-                    ImGui::TextColored(c.ok ? kGood : c.required ? kBad : kWarn, "%s", c.ok ? "[ok]" : c.required ? "[missing]" : "[optional]");
+                    ImGui::TextColored(c.ok ? kGood : c.required ? kBad : kWarn, "%s", c.ok ? "[ok]" : c.required ? c.fail : "[optional]");
                     ImGui::SameLine();
                     ImGui::TextUnformatted(c.text.c_str());
                 }
                 ImGui::Spacing();
-                if (!dump_ok(checks)) ImGui::TextColored(kBad, "The dump folder is incomplete; the game cannot start.");
+                if (!dump_ok(checks)) ImGui::TextColored(kBad, "The dump folder is incomplete or not supported; the game cannot start.");
             } else if (t == 1) {
                 // A key on two actions is allowed (l1/r1 share Left Shift by default) but flagged. fairy_tap / pointer_tap
                 // only apply in their pointer modes, so it is not compared with the normal-mode actions.
@@ -1466,7 +1480,7 @@ int main(int argc, char** argv) {
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().FramePadding.y);
                 if (ImGui::SmallButton("Show log")) ImGui::OpenPopup("Last run log");
             } else if (u_busy) ImGui::TextColored(kGold, "Updating the launcher...");
-            else if (!dump_ok(checks)) ImGui::TextColored(kWarn, "Select a complete dump folder on the Game page.");
+            else if (!dump_ok(checks)) ImGui::TextColored(kWarn, "Select a complete, supported dump folder on the Game page.");
             else if (!updated_msg.empty()) ImGui::TextColored(kGood, "%s", updated_msg.c_str());
             else ImGui::TextColored(kDim, "Ready to play.");
             ImGui::SameLine(ImGui::GetContentRegionMax().x - play.x);

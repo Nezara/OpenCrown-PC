@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)  # Ubuntu 22.04 stock cmake
 project(OpenCrownLinux C CXX)
-set(OPENCROWN_VERSION "1.0.1")  # Linux build; versioned separately from the Windows build in ../port
+set(OPENCROWN_VERSION "1.0.2")  # Linux build; versioned separately from the Windows build in ../port
 # Updater end-to-end tests build a fake newer release in a separate build dir (packaging/make-appimage.sh, OC_VERSION).
 if(OPENCROWN_VERSION_OVERRIDE)
   set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")
@@ -167,6 +167,9 @@ if(DCP_RENDER)
   target_include_directories(dcp_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
   target_compile_options(dcp_imgui PRIVATE -w)  # third-party
   target_link_libraries(dcp_imgui PUBLIC SDL3::SDL3-static ${CMAKE_DL_LIBS})
+  # dcp_run's name-entry box (the PS4 keyboard dialog's stand-in).
+  target_sources(dcp_run PRIVATE tools/dcp_run/ime_box.cpp)
+  target_link_libraries(dcp_run PRIVATE dcp_imgui)
 
   add_executable(opencrown_launcher tools/launcher/main.cpp)
   target_link_libraries(opencrown_launcher PRIVATE dcp_imgui dcp_net)

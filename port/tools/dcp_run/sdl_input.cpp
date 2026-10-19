@@ -120,9 +120,17 @@ public:
         dev_.on_event(e);
     }
     bool kbm_active() const override { return dev_.kbm(); }
+    void set_blocked(bool b) override { blocked_ = b; }
 
     void update(SDL_Window* win) override {
         dcp::hle::PadState s[4];
+        if (blocked_) {
+            if (rel_) SDL_SetWindowRelativeMouseMode(win, false), rel_ = false;
+            std::lock_guard<std::mutex> lk(mu_);
+            for (int i = 0; i < 4; ++i) snap_[i] = s[i];
+            finger_ = false;
+            return;
+        }
         std::vector<SDL_Gamepad*> pads;
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -301,6 +309,7 @@ private:
     std::map<std::string, std::vector<Bind>> binds_;
     DeviceTracker dev_{!SDL_HasGamepad()};  // start on KB/M unless a gamepad is plugged in
     bool fairy_on_ = false, toggle_was_ = false, rel_ = false;
+    bool blocked_ = false;  // ImeBox open (render-loop thread only)
     uint64_t look_ms_ = 0;  // SDL_GetTicks when a look key was last held (pointer_tap window)
     bool finger_ = false, lift_ = false, lift_seen_ = false;  // lift_*: guarded by mu_
     float fx_ = 0, fy_ = 0;

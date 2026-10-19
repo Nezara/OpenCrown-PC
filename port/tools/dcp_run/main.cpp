@@ -16,6 +16,7 @@
 #include <windows.h>
 
 #include "hle/hle.h"
+#include "hle/ime.h"
 #include "hle/skip_offers.h"
 #include "loader/elf.h"
 #include "loader/hle.h"
@@ -357,6 +358,7 @@ int main(int argc, char** argv) {
             input_dir = user && *user ? dcp::user_dir() : dir.substr(0, dir.find_last_of("/\\"));
         }
         if (render && window && input_path.empty()) input = install_sdl_input(input_dir);
+        if (input) dcp::hle::ime_set_host(true);  // the render loop draws the name-entry box (ime_box.h)
 #endif
         // Own thread so the game gets a large stack (PS4 main thread: guess 8 MiB; 16 MiB here), fully committed: game
         // code has no stack probes, so frames > 4 KiB would skip the Windows guard page.

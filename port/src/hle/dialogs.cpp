@@ -1,11 +1,15 @@
-// CommonDialog family (ErrorDialog, MsgDialog, SaveDataDialog, SigninDialog): headless. Every dialog shares one
+// CommonDialog family (ErrorDialog, MsgDialog, SaveDataDialog, SigninDialog): headless. ImeDialog (the keyboard) is
+// the exception: the host draws it (ime.h). Every dialog shares one
 // status machine NONE -> INITIALIZED (Initialize) -> RUNNING (Open) -> FINISHED (first status poll after Open)
 // -> INITIALIZED (Close) -> NONE (Terminate). The result is "OK / YES" (buttonId 1). What the dialog would have shown
 // (message text, system message type, error code) is logged so a later UI layer knows what to draw.
+#include <algorithm>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 #include "common.h"
+#include "ime.h"
 
 namespace dcp::hle {
 namespace {
@@ -150,7 +154,129 @@ DCP_SYSV int32_t sceSigninDialogOpen(const void*) {
 DCP_SYSV int32_t sceSigninDialogUpdateStatus() { return g_signin.poll(); }
 DCP_SYSV int32_t sceSigninDialogTerminate() { return g_signin.term(); }
 
+// ---- ImeDialog (ime.h): SceImeDialogParam +0x24 maxTextLength, +0x28 inputTextBuffer (UTF-16, the current text on
+// entry, the result on OK), +0x48 title (UTF-16). Status NONE 0 / RUNNING 1 / FINISHED 2; result +0 endstatus
+// OK 0 / USER_CANCELED 1 / ABORTED 2. ----
+enum ImeStatus : int32_t { kImeNone = 0, kImeRunning = 1, kImeFinished = 2 };
+constexpr int32_t kImeBusy = int32_t(0x80bc0001u);  // SCE_IME_ERROR_BUSY
+
+std::string utf16_to_utf8(const char16_t* s, size_t max) {
+    std::string out;
+    for (size_t i = 0; s && i < max && s[i]; ++i) {
+        uint32_t c = s[i];
+        if (c >= 0xd800 && c < 0xdc00 && i + 1 < max && s[i + 1] >= 0xdc00 && s[i + 1] < 0xe000)
+            c = 0x10000 + ((c - 0xd800) << 10) + (s[++i] - 0xdc00);
+        if (c < 0x80) out += char(c);
+        else if (c < 0x800) out += char(0xc0 | c >> 6), out += char(0x80 | (c & 0x3f));
+        else if (c < 0x10000) out += char(0xe0 | c >> 12), out += char(0x80 | (c >> 6 & 0x3f)), out += char(0x80 | (c & 0x3f));
+        else out += char(0xf0 | c >> 18), out += char(0x80 | (c >> 12 & 0x3f)), out += char(0x80 | (c >> 6 & 0x3f)), out += char(0x80 | (c & 0x3f));
+    }
+    return out;
+}
+std::u16string utf8_to_utf16(const std::string& s) {
+    std::u16string out;
+    for (size_t i = 0; i < s.size();) {
+        uint8_t b = uint8_t(s[i]);
+        int n = b < 0x80 ? 0 : b >= 0xf0 ? 3 : b >= 0xe0 ? 2 : b >= 0xc0 ? 1 : -1;
+        if (n < 0 || i + n >= s.size()) { ++i; continue; }  // stray continuation / truncated sequence
+        uint32_t c = n == 0 ? b : b & (0x3f >> n);
+        for (int k = 1; k <= n; ++k) c = c << 6 | (uint8_t(s[i + k]) & 0x3f);
+        i += n + 1;
+        if (c >= 0x10000) out += char16_t(0xd800 + ((c - 0x10000) >> 10)), out += char16_t(0xdc00 + (c & 0x3ff));
+        else out += char16_t(c);
+    }
+    return out;
+}
+
+struct Ime {
+    std::mutex mu;
+    bool host = false;
+    ImeStatus status = kImeNone;
+    int32_t end = 0;
+    uint64_t id = 0;
+    char16_t* buf = nullptr;
+    uint32_t max = 0;
+    std::string title, text;
+} g_ime;
+
+// Caller holds g_ime.mu. text == nullptr: cancelled, the buffer keeps the game's text.
+void ime_close_locked(const std::u16string* text, int32_t end) {
+    if (text && g_ime.buf) {
+        size_t n = std::min<size_t>(text->size(), g_ime.max);
+        if (n && n == g_ime.max && (*text)[n - 1] >= 0xd800 && (*text)[n - 1] < 0xdc00) --n;  // don't split a pair
+        std::memcpy(g_ime.buf, text->data(), n * 2);
+        g_ime.buf[n] = 0;  // the game allocates maxTextLength + 1 units
+    }
+    g_ime.end = end;
+    g_ime.status = kImeFinished;
+}
+
+DCP_SYSV int32_t sceImeDialogInit(const uint8_t* p, const void*) {
+    if (!p) return kErr(kEINVAL);
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    if (g_ime.status != kImeNone) return kImeBusy;
+    g_ime.max = rd<uint32_t>(p, 0x24);
+    g_ime.buf = rd<char16_t*>(p, 0x28);
+    g_ime.title = utf16_to_utf8(rd<const char16_t*>(p, 0x48), 256);
+    g_ime.text = utf16_to_utf8(g_ime.buf, g_ime.max);
+    g_ime.status = kImeRunning;
+    ++g_ime.id;
+    std::fprintf(stderr, "HLE sceImeDialogInit: \"%s\" text \"%s\" max %u%s\n", g_ime.title.c_str(), g_ime.text.c_str(),
+                 g_ime.max, g_ime.host ? "" : " -> OK unchanged (headless)");
+    if (!g_ime.host) ime_close_locked(nullptr, 0);
+    return kOk;
+}
+DCP_SYSV int32_t sceImeDialogGetStatus() {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    return g_ime.status;
+}
+DCP_SYSV int32_t sceImeDialogGetResult(uint8_t* r) {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    if (g_ime.status != kImeFinished) return int32_t(0x80bc0004u);  // SCE_IME_DIALOG_ERROR_INVALID_STATE
+    if (r) std::memcpy(r, &g_ime.end, 4);
+    return kOk;
+}
+DCP_SYSV int32_t sceImeDialogAbort() {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    if (g_ime.status == kImeRunning) ime_close_locked(nullptr, 2);
+    return kOk;
+}
+DCP_SYSV int32_t sceImeDialogTerm() {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    g_ime.status = kImeNone;
+    g_ime.buf = nullptr;
+    return kOk;
+}
+// The game centres the (unused) panel position from this size; any plausible panel size does.
+DCP_SYSV int32_t sceImeDialogGetPanelSizeExtended(const void*, const void*, uint32_t* w, uint32_t* h) {
+    if (w) *w = 793;
+    if (h) *h = 408;
+    return kOk;
+}
+
 }  // namespace
+
+void ime_set_host(bool present) {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    g_ime.host = present;
+}
+bool ime_pending(ImeRequest* out) {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    if (g_ime.status != kImeRunning) return false;
+    if (out) *out = {g_ime.id, g_ime.title, g_ime.text, g_ime.max};
+    return true;
+}
+void ime_finish(uint64_t id, const std::string* text) {
+    std::lock_guard<std::mutex> lk(g_ime.mu);
+    if (g_ime.status != kImeRunning || id != g_ime.id) return;
+    std::fprintf(stderr, "HLE ImeDialog: %s%s%s\n", text ? "OK \"" : "cancelled", text ? text->c_str() : "", text ? "\"" : "");
+    if (text) {
+        std::u16string t = utf8_to_utf16(*text);
+        ime_close_locked(&t, 0);
+    } else {
+        ime_close_locked(nullptr, 1);
+    }
+}
 
 void register_dialogs() {
     REG("libSceCommonDialog", sceCommonDialogInitialize); REG("libSceCommonDialog", sceCommonDialogIsUsed);
@@ -167,6 +293,9 @@ void register_dialogs() {
     const char* g = "libSceSigninDialog";
     REG(g, sceSigninDialogInitialize); REG(g, sceSigninDialogOpen); REG(g, sceSigninDialogUpdateStatus);
     REG(g, sceSigninDialogTerminate);
+    const char* i = "libSceImeDialog";
+    REG(i, sceImeDialogInit); REG(i, sceImeDialogGetStatus); REG(i, sceImeDialogGetResult); REG(i, sceImeDialogAbort);
+    REG(i, sceImeDialogTerm); REG(i, sceImeDialogGetPanelSizeExtended);
 }
 
 }  // namespace dcp::hle

@@ -28,7 +28,8 @@ fi
 for who in host join; do
     rm -rf "$OUT/save_$who" "$OUT/user_$who"
     mkdir -p "$OUT/save_$who" "$OUT/user_$who"
-    cp -r "$SAVES/." "$OUT/save_$who/"
+    SRC="$SAVES"; [ "$who" = join ] && SRC="${DCP_SAVES_JOIN:-$SAVES}"  # DCP_SAVES_JOIN: a different save for the joiner
+    cp -r "$SRC/." "$OUT/save_$who/"
 done
 JOIN_TEST=join
 if [ "${DCP_TWO_MODE:-}" = friends ]; then
@@ -43,9 +44,11 @@ if [ "${DCP_TWO_MODE:-}" = friends ]; then
 fi
 run() {  # who port frame
     T=$1; [ "$1" = join ] && T=$JOIN_TEST
+    IN="$INPUT"; [ "$1" = host ] && IN="${DCP_INPUT_HOST:-$INPUT}"  # DCP_INPUT_HOST: own pad script for the host
+    # DCP_HOST_ARGS / DCP_JOIN_ARGS: extra dcp_run arguments (no spaces inside one), e.g. --render --shots ...
     DCP_LOBBY="$LOBBY" DCP_NET_TEST=$T DCP_NET_TEST_FRAME=$3 DCP_NP_NAME=${1}Player DCP_NET_PORT=$2 \
     DCP_USER_DIR="$(cygpath -w "$OUT/user_$1")" DCP_SAVE_ROOT="$(cygpath -w "$OUT/save_$1")" DCP_NO_AUDIO=1 \
-        timeout 900 port/build/dcp_run.exe "Game/Personal File Dump/eboot.bin" --input "$INPUT" --frames "$FRAMES" \
+        timeout 900 port/build/dcp_run.exe "Game/Personal File Dump/eboot.bin" --input "$IN" --frames "$FRAMES" $( [ "$1" = host ] && echo ${DCP_HOST_ARGS:-} || echo ${DCP_JOIN_ARGS:-} ) \
         > "$OUT/$1.log" 2>&1
 }
 run host 40001 "$HF" &

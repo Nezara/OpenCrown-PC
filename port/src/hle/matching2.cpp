@@ -125,7 +125,7 @@ struct MemberInfo {
 };
 
 enum class Kind { Hello, Worlds, SetUserInfo, CreateJoin, Join, Leave, Search, SetInternal, SetExternal, Endpoint,
-                  SetPresence, FriendList };
+                  SetPresence, FriendList, Rehello, Resume };
 struct Pending {
     Kind kind;
     uint32_t req_id = 0;  // the id the game got back (0 for internal requests)
@@ -157,6 +157,9 @@ std::map<uint32_t, Pending> g_pending;  // lobby rid -> request
 bool g_hello_sent = false, g_hello_ok = false, g_start_wanted = false;
 int32_t g_hello_err = 0;
 bool g_lobby_down = false;
+// Lobby link dropped and the client is reconnecting (lobby_protocol.md 1.1): the game is told nothing; its requests
+// wait in the lobby client until hello + resume went through on the new socket.
+bool g_link_lost = false;
 std::vector<std::pair<uint16_t, int32_t>> g_ctx_events;  // context events raised by Start/Stop, sent from the pump
 std::vector<Pending> g_local_done;  // requests answered without the lobby (unchanged room data), sent from the pump
 std::string g_last_external;        // last SetRoomDataExternal body sent to the lobby
@@ -383,8 +386,8 @@ uint32_t ip_from(const std::string& s) {
     return a.s_addr;  // network order
 }
 
-// Queue a request to the lobby for a game call. Caller holds g_mu.
-uint32_t issue(Kind k, const std::string& op, Json body, const void* opt, uint16_t ev) {
+// Queue a request to the lobby for a game call. Caller holds g_mu. urgent: goes out while a reconnect pauses traffic.
+uint32_t issue(Kind k, const std::string& op, Json body, const void* opt, uint16_t ev, bool urgent = false) {
     Pending p;
     p.kind = k, p.ev = ev;
     if (opt) {
@@ -392,7 +395,7 @@ uint32_t issue(Kind k, const std::string& op, Json body, const void* opt, uint16
         p.arg = rd<void*>(opt, 8);
         p.req_id = g_next_req++;
     }
-    uint32_t rid = lobby().request(op, std::move(body));
+    uint32_t rid = lobby().request(op, std::move(body), urgent);
     g_pending[rid] = p;
     return p.req_id;
 }
@@ -409,9 +412,7 @@ void flush_presence_locked() {
     issue(Kind::SetPresence, "set_presence", b, nullptr, 0);
 }
 
-void send_hello_locked() {
-    if (g_hello_sent) return;
-    g_hello_sent = true;
+Json hello_body() {
     const NpIdentity& id = np_identity();
     Json h;
     h["proto"] = net::kLobbyProtocol;
@@ -421,10 +422,28 @@ void send_hello_locked() {
     h["account_id"] = net::u64_str(id.account_id);
     if (!id.secret.empty()) h["secret"] = id.secret;  // verified account: friends see us online / in our room
     h["udp_port"] = int(configured_udp_port());
+    return h;
+}
+
+void send_hello_locked() {
+    if (g_hello_sent) return;
+    g_hello_sent = true;
+    const NpIdentity& id = np_identity();
     g_reported_port = configured_udp_port();
-    issue(Kind::Hello, "hello", h, nullptr, 0);
+    issue(Kind::Hello, "hello", hello_body(), nullptr, 0);
     std::fprintf(stderr, "MATCHING2 hello -> %s as %s (account %llu, udp %u)\n", lobby().url().c_str(),
                  id.online_id.c_str(), (unsigned long long)id.account_id, g_reported_port);
+}
+
+// Reconnect done (seat resumed, or none to resume): let the waiting requests out and re-send what the lobby keeps
+// per connection - endpoint (re-signals the room; peers keep their first endpoint) and presence.
+void finish_reconnect_locked() {
+    g_link_lost = false;
+    lobby().resume_traffic();
+    g_reported_port = 0, g_reported_ip.clear(), g_endpoint_inflight = false;
+    g_last_external.clear();
+    g_pres_sent = "/";
+    flush_presence_locked();
 }
 
 // ---- SysV entry points ----
@@ -458,9 +477,9 @@ DCP_SYSV int32_t sceNpMatching2ContextStart(uint16_t ctx, uint64_t) {
     if (!g_ctx_created) return kErrNotInit;
     g_start_wanted = true;  // context event goes out from matching2_pump once the lobby answered hello
     if (g_hello_ok && !g_lobby_down) g_ctx_events.push_back({kCtxEvStart, 0});  // restart: link already up
-    // Restart after the link dropped: the lobby client never reconnects within a session and hello was already sent,
-    // so nothing else would answer. Fail the start like an unreachable lobby at launch (the game stays offline);
-    // without it the game waits forever at the next stage load.
+    // Restart after the link was given up for good (every reconnect try failed, or DCP_LOBBY_RECONNECT=0): hello was
+    // already sent, so nothing else would answer. Fail the start like an unreachable lobby at launch (the game stays
+    // offline); without it the game waits forever at the next stage load.
     else if (g_hello_sent && g_lobby_down) g_ctx_events.push_back({kCtxEvStart, LobbyClient::kErrLobbyDown});
     send_hello_locked();
     return kOk;
@@ -666,9 +685,23 @@ void matching2_pump() {
         if (!g_hello_sent) return;  // never went online: no lobby traffic at all
         LobbyMessage m;
         while (lobby().poll(&m)) {
+            if (m.kind == LobbyMessage::Lost) {  // reconnecting (1.1): the game is not told
+                if (g_lobby_down) continue;
+                g_link_lost = true;
+                g_endpoint_inflight = false;
+                std::fprintf(stderr, "MATCHING2 lobby link lost, reconnecting (room %llu, member 0x%x)\n",
+                             (unsigned long long)g_room, g_me);
+                continue;
+            }
+            if (m.kind == LobbyMessage::Back) {  // new socket: hello again, then retake the seat
+                if (g_lobby_down) continue;
+                issue(Kind::Rehello, "hello", hello_body(), nullptr, 0, true);
+                continue;
+            }
             if (m.kind == LobbyMessage::Down) {
                 if (g_lobby_down) continue;
                 g_lobby_down = true;
+                g_link_lost = false;
                 g_last_external.clear();
                 std::fprintf(stderr, "MATCHING2 lobby link down\n");
                 if (g_room && g_room_cb) {
@@ -691,6 +724,55 @@ void matching2_pump() {
                 if (it == g_pending.end()) continue;
                 Pending p = it->second;
                 g_pending.erase(it);
+                if (p.kind == Kind::Rehello) {
+                    std::fprintf(stderr, "MATCHING2 re-hello %s (err 0x%x)\n", m.err ? "FAILED" : "ok", uint32_t(m.err));
+                    if (m.err == 0) {
+                        g_your_ip = m.body.get("your_ip").as_string();
+                        g_lobby_local = net::stun::is_private_or_loopback(ip_from(g_your_ip));
+                    }
+                    if (m.err == 0 && g_room) {
+                        Json b;
+                        b["room_id"] = net::u64_str(g_room);
+                        b["member_id"] = int(g_me);
+                        issue(Kind::Resume, "resume", b, nullptr, 0, true);
+                        continue;
+                    }
+                    if (m.err && g_room && g_room_cb) {  // refused on the new socket: the seat is gone
+                        RoomCb cb = g_room_cb;
+                        void* arg = g_room_arg;
+                        uint64_t room = g_room;
+                        auto a = std::make_shared<Arena>();
+                        uint8_t* d = a->alloc(0x10);
+                        calls.push_back([=] { cb(kCtxId, room, kRoomEvDestroyed, d, arg); (void)a; });
+                        g_room = 0, g_members.clear(), g_signals.clear();
+                        net::clear_peer_addresses();
+                    }
+                    finish_reconnect_locked();
+                    continue;
+                }
+                if (p.kind == Kind::Resume) {
+                    if (m.err == 0) {
+                        std::fprintf(stderr, "MATCHING2 seat resumed: room %llu member 0x%x (%zu members)\n",
+                                     (unsigned long long)g_room, g_me, m.body.get("room").get("members").size());
+                    } else if (g_room) {
+                        // Grace over (or too much missed): the others saw us leave. The game gets "room destroyed"
+                        // with the link up, so it can go online again at its next stage.
+                        std::fprintf(stderr, "MATCHING2 seat lost (err 0x%x): room %llu\n", uint32_t(m.err),
+                                     (unsigned long long)g_room);
+                        if (g_room_cb) {
+                            RoomCb cb = g_room_cb;
+                            void* arg = g_room_arg;
+                            uint64_t room = g_room;
+                            auto a = std::make_shared<Arena>();
+                            uint8_t* d = a->alloc(0x10);
+                            calls.push_back([=] { cb(kCtxId, room, kRoomEvDestroyed, d, arg); (void)a; });
+                        }
+                        g_room = 0, g_members.clear(), g_signals.clear();
+                        net::clear_peer_addresses();
+                    }
+                    finish_reconnect_locked();
+                    continue;
+                }
                 if (p.kind == Kind::Hello) {
                     g_hello_ok = m.err == 0;
                     g_hello_err = m.err;
@@ -877,7 +959,7 @@ void matching2_pump() {
         // Behind a NAT (the lobby saw a public address) the endpoint is the STUN-mapped one of the P2P socket; with a
         // LAN / local lobby, or when STUN fails, it is the local port (with the address the lobby sees). net.md 11.
         bool endpoint_final = false;
-        if (g_hello_ok && !g_lobby_down) {
+        if (g_hello_ok && !g_lobby_down && !g_link_lost) {
             uint16_t port = net::rudp::bound_port();
             if (port && !g_bound_ms) g_bound_ms = GetTickCount64();
             uint32_t pip = 0;

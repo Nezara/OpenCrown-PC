@@ -11,6 +11,7 @@ struct LobbyServerOptions {
     uint16_t port = 47834;          // TCP listen port (0 = any; see LobbyServer::port())
     bool loopback_only = true;      // bind 127.0.0.1 (false: 0.0.0.0 for LAN tests)
     bool verbose = true;            // log every message to stderr
+    int grace_ms = 30000;           // seat grace after a verified socket drops (lobby_protocol.md 1.1); 0 = leave at once
 };
 
 class LobbyServer {

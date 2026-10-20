@@ -9,5 +9,7 @@
     "bindings": [{ "name": "LOBBY", "class_name": "Lobby" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Lobby"] }],
+  // Seat grace after a dropped socket (lobby_protocol.md 1.1), ms; "0" = a close leaves the room at once.
+  "vars": { "SEAT_GRACE_MS": "30000" },
   "observability": { "enabled": false }
 }

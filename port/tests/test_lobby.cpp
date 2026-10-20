@@ -340,6 +340,92 @@ static void test_identity() {
     CHECK(friend_code_normalize(" k7qf-2m9x ") == "K7QF2M9X" && friend_code_display("K7QF2M9X") == "K7QF-2M9X");
 }
 
+// Seat grace (lobby_protocol.md 1.1): a verified member's closed socket keeps its seat, events are held for it, and
+// `resume` on a new socket retakes it. expiry_url: a local lobby with a short grace, for the grace-over half.
+static void test_seat_grace(const std::string& url, const std::string& expiry_url) {
+    std::mt19937_64 rnd(std::random_device{}() ^ uint64_t(Clock::now().time_since_epoch().count()));
+    auto secret = [&] {
+        std::string s;
+        char t[17];
+        for (int i = 0; i < 4; ++i) std::snprintf(t, sizeof t, "%016llx", (unsigned long long)rnd()), s += t;
+        return s;
+    };
+    auto hello = [](TestClient& t, const char* name, uint64_t acc, const std::string& sec, int port) {
+        Json h;
+        h["proto"] = kLobbyProtocol, h["version"] = kGameNetVersion, h["name"] = name, h["account_id"] = u64_str(acc);
+        h["udp_port"] = port;
+        if (!sec.empty()) h["secret"] = sec;
+        return t.reply(t.send("hello", h)).get("err").as_int();
+    };
+    auto create = [](TestClient& t) {
+        Json cr;
+        cr["world_id"] = 1, cr["max_slot"] = 3, cr["flag_attr"] = int64_t(0x86000000u);
+        cr["int_attrs"] = Json::array(), cr["bin_internal"] = Json::array(), cr["bin_external"] = Json::array();
+        return t.reply(t.send("create_room", cr)).get("room").get("room_id").as_string();
+    };
+    auto join = [](TestClient& t, const std::string& room) {
+        Json j;
+        j["room_id"] = room;
+        return t.reply(t.send("join", j)).get("member_id").as_int();
+    };
+    auto resume = [](TestClient& t, const std::string& room, int mid) {
+        Json j;
+        j["room_id"] = room, j["member_id"] = mid;
+        return t.reply(t.send("resume", j));
+    };
+    const uint64_t A = rnd() | 1, B = rnd() | 1, C = rnd() | 1;
+    const std::string sa = secret(), sb = secret();
+    {
+        TestClient a(url), b(url);
+        CHECK(hello(a, "GraceHost", A, sa, 41001) == 0 && hello(b, "GraceGuest", B, sb, 41002) == 0);
+        std::string room = create(a);
+        CHECK(!room.empty() && join(b, room) == 0x20);
+        a.event("member_joined");
+        b.close();
+        a.pump(300);  // nobody is told
+        bool told = false;
+        for (const Json& m : a.inbox) told |= m.get("ev").as_string() == "member_left" || m.get("ev").as_string() == "signal_dead";
+        CHECK(!told);
+        TestClient c(url);
+        CHECK(hello(c, "GraceThird", C, secret(), 41003) == 0 && join(c, room) == 0x30);  // the held seat still counts
+        TestClient x(url), u(url);
+        CHECK(hello(x, "Imposter", rnd() | 1, secret(), 1) == 0);
+        CHECK(resume(x, room, 0x20).get("err").as_int() == int32_t(0x80550d0f));
+        CHECK(hello(u, "Unverified", 0, "", 1) == 0);
+        CHECK(resume(u, room, 0x20).get("err").as_int() == int32_t(0x80550c08));
+        TestClient b2(url);
+        CHECK(hello(b2, "GraceGuest", B, sb, 41012) == 0);
+        Json rs = resume(b2, room, 0x20);
+        CHECK(rs.get("err").as_int() == 0 && rs.get("member_id").as_int() == 0x20 && rs.get("room").get("members").size() == 3);
+        CHECK(b2.event("member_joined").get("member").get("member_id").as_int() == 0x30);  // held, after the reply
+        CHECK(resume(b2, room, 0x20).get("err").as_int() == int32_t(0x80550c06));
+        a.inbox.clear();
+        Json e;
+        e["port"] = 41012;
+        b2.reply(b2.send("endpoint", e));
+        bool sig = false;
+        for (int i = 0; i < 50 && !sig; ++i) {
+            a.pump(10);
+            for (const Json& m : a.inbox)
+                sig |= m.get("ev").as_string() == "signal" && m.get("member_id").as_int() == 0x20 && m.get("port").as_int() == 41012;
+        }
+        CHECK(sig);
+        b2.reply(b2.send("leave", Json::object()));  // an ordinary leave after a resume
+        CHECK(a.event("member_left").get("member_id").as_int() == 0x20);
+    }
+    if (expiry_url.empty()) return;
+    TestClient a(expiry_url), b(expiry_url);
+    CHECK(hello(a, "GraceHost", A, sa, 41001) == 0 && hello(b, "GraceGuest", B, sb, 41002) == 0);
+    std::string room = create(a);
+    CHECK(join(b, room) == 0x20);
+    a.event("member_joined");
+    b.close();
+    Json left = a.event("member_left");  // grace (300 ms here) over: a disconnect after all
+    CHECK(left.get("member_id").as_int() == 0x20 && left.get("cause").as_int() == 2);
+    TestClient b3(expiry_url);
+    CHECK(hello(b3, "GraceGuest", B, sb, 41022) == 0 && resume(b3, room, 0x20).get("err").as_int() == int32_t(0x80550d0f));
+}
+
 int main() {
     const char* ext_url = std::getenv("DCP_LOBBY_TEST_URL");
     std::unique_ptr<LobbyServer> srv;
@@ -515,6 +601,66 @@ int main() {
     test_friends(url);
     test_bug_report(url);
     test_identity();
+    {
+        std::unique_ptr<LobbyServer> short_grace;
+        std::atomic<bool> stop2{false};
+        std::thread th2;
+        std::string url2;
+        if (srv) {
+            LobbyServerOptions o;
+            o.port = 0, o.grace_ms = 300, o.verbose = std::getenv("LOBBY_VERBOSE") != nullptr;
+            short_grace.reset(new LobbyServer(o));
+            th2 = std::thread([&] { short_grace->run(&stop2); });
+            url2 = "ws://127.0.0.1:" + std::to_string(short_grace->port()) + "/";
+        }
+        test_seat_grace(url, url2);
+        stop2 = true;
+        if (th2.joinable()) th2.join();
+    }
+    if (srv) {
+        // LobbyClient reconnect: the lobby goes away and comes back on the same port. Lost, then Back; a request made
+        // meanwhile waits until resume_traffic() and is answered on the new socket.
+        uint16_t port = srv->port();
+        stop = true;
+        th.join();
+        srv.reset();
+        auto lost = Clock::now();
+        bool got_lost = false;
+        for (int i = 0; i < 300 && !got_lost; ++i) {
+            while (lc.poll(&m)) got_lost |= m.kind == LobbyMessage::Lost;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(got_lost);
+        uint32_t waiting = lc.request("worlds", Json::object());
+        LobbyServerOptions o;
+        o.port = port, o.verbose = std::getenv("LOBBY_VERBOSE") != nullptr;
+        for (int i = 0; i < 50 && (!srv || !srv->listening()); ++i) {
+            srv.reset(new LobbyServer(o));
+            if (!srv->listening()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        CHECK(srv->listening());
+        stop = false;
+        th = std::thread([&] { srv->run(&stop); });
+        bool back = false, early = false, answered = false;
+        uint32_t rh = 0;
+        for (int i = 0; i < 1500 && !answered; ++i) {
+            while (lc.poll(&m)) {
+                if (m.kind == LobbyMessage::Back) {
+                    back = true;
+                    rh = lc.request("hello", lh, true);
+                } else if (m.kind == LobbyMessage::Response && m.rid == rh && rh) {
+                    CHECK(m.err == 0);
+                    lc.resume_traffic();
+                } else if (m.kind == LobbyMessage::Response && m.rid == waiting) {
+                    early |= !back || !rh;
+                    answered = m.err == 0;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(back && answered && !early && lc.connected());
+        CHECK(Clock::now() - lost < std::chrono::seconds(15));
+    }
 
     // JSON round trip details used by the protocol (u64 ids as strings, escapes).
     Json x;

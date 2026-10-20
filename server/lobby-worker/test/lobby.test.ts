@@ -45,7 +45,7 @@ class Client {
     this.ws.send(JSON.stringify({ ...body, op, rid }));
     return rid;
   }
-  private async take(pred: (m: Msg) => boolean): Promise<Msg> {
+  async take(pred: (m: Msg) => boolean): Promise<Msg> {
     for (let i = 0; i < 200; ++i) {
       const k = this.inbox.findIndex(pred);
       if (k >= 0) return this.inbox.splice(k, 1)[0];
@@ -659,6 +659,66 @@ describe("lobby protocol rev 1", () => {
     expect((await get("/reports", "test-token")).headers.get("X-Content-Type-Options")).toBe("nosniff");
     expect((await get("/reports/1", "test-token")).headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
+  it("seat grace (1.1): verified close keeps the seat, events held, resume retakes it; grace over = disconnect", async () => {
+    const sa = secret(), sb = secret();
+    const a = await Client.open("198.51.100.50"), b = await Client.open("198.51.100.51");
+    await a.hello("GraceHost", "9901", 40001, sa);
+    await b.hello("GraceGuest", "9903", 40002, sb);
+    const room = (await a.req("create_room", createReq(3))).room;
+    expect((await b.req("join", { room_id: room.room_id })).member_id).toBe(0x20);
+    await a.event("member_joined");
+    await b.close();
+    // Nobody is told; the seat still counts.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(a.inbox.filter((m) => m.ev === "member_left" || m.ev === "signal_dead")).toEqual([]);
+    const c = await Client.open("198.51.100.52");
+    await c.hello("GraceThird", "9905", 40003, secret());
+    expect((await c.req("join", { room_id: room.room_id })).member_id).toBe(0x30);
+    a.inbox = [];
+
+    // Wrong account / unverified / wrong seat are refused; the right one resumes with the held event behind the reply.
+    const x = await Client.open("198.51.100.53");
+    await x.hello("Imposter", "9907", 1, secret());
+    expect((await x.req("resume", { room_id: room.room_id, member_id: 0x20 })).err).toBe(0x80550d0f | 0);
+    const u = await Client.open("198.51.100.54");
+    await u.hello("Unverified", "0", 1);
+    expect((await u.req("resume", { room_id: room.room_id, member_id: 0x20 })).err).toBe(ERR.unverified);
+    const b2 = await Client.open("198.51.100.51");
+    await b2.hello("GraceGuest", "9903", 40012, sb);
+    const rs = await b2.req("resume", { room_id: room.room_id, member_id: 0x20 });
+    expect(rs.err).toBe(0);
+    expect(rs.member_id).toBe(0x20);
+    expect(rs.room.members.map((m: Msg) => m.member_id)).toEqual([0x10, 0x20, 0x30]);
+    expect((await b2.event("member_joined")).member.member_id).toBe(0x30);
+    expect((await b2.req("resume", { room_id: room.room_id, member_id: 0x20 })).err).toBe(0x80550c06 | 0);
+    // The resumed seat is live again: endpoint re-signals, a leave is an ordinary leave.
+    await b2.req("endpoint", { port: 40012 });
+    expect((await a.take((m) => m.ev === "signal" && m.member_id === 0x20)).port).toBe(40012);
+    await b2.close();
+
+    // Grace over: the alarm drops the seat like a disconnect, a late resume is refused.
+    await runInDurableObject(lobbyStub(), async (o: unknown) => {
+      const lobby = o as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+      lobby.rooms.get(room.room_id).members[0x20].away.until = Date.now() - 1;
+      await lobby.alarm();
+    });
+    expect(await a.event("member_left")).toMatchObject({ member_id: 0x20, cause: 2 });
+    const b3 = await Client.open("198.51.100.51");
+    await b3.hello("GraceGuest", "9903", 40022, sb);
+    expect((await b3.req("resume", { room_id: room.room_id, member_id: 0x20 })).err).toBe(0x80550d0f | 0);
+
+    // Owner drop held, then resumed: no owner change; too many held events refuse the resume.
+    await a.close();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(c.inbox.filter((m) => m.ev === "owner_changed")).toEqual([]);
+    for (let i = 0; i < 33; ++i) await c.req("set_room_internal", { room_id: room.room_id, flag_filter: 0, flag_attr: 0, bin_internal: [] });
+    const a2 = await Client.open("198.51.100.50");
+    await a2.hello("GraceHost", "9901", 40001, sa);
+    expect((await a2.req("resume", { room_id: room.room_id, member_id: 0x10 })).err).toBe(0x80550d0f | 0);
+    expect(await c.event("owner_changed")).toMatchObject({ prev: 0x10, new: 0x30 });
+    await Promise.all([a2.close(), b3.close(), c.close(), x.close(), u.close()]);
+  });
+
 });
 
 const lobbyStub = () => (env as any).LOBBY.get((env as any).LOBBY.idFromName("global")) as DurableObjectStub;

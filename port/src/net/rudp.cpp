@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -24,6 +25,7 @@ struct Ctx {
     ConnId conn = -1;
     CtxState st = CtxState::Created;
     std::deque<std::vector<uint8_t>> rx;
+    std::deque<std::chrono::steady_clock::time_point> rx_at;  // when each rx message becomes readable ($DCP_NET_DELAY_MS)
     uint32_t sndbuf = 0x40000, rcvbuf = 0x40000;
     std::map<int32_t, int32_t> opts;
     uint64_t rx_msgs = 0, rx_bytes = 0, tx_msgs = 0, tx_bytes = 0;  // for the connection log lines
@@ -53,6 +55,37 @@ std::map<int32_t, std::map<int32_t, uint16_t>> g_polls;  // poll -> ctx -> reque
 std::map<int32_t, Sock> g_socks;
 int32_t g_next_ctx = 1, g_next_poll = 1, g_next_sock = 1;
 
+// $DCP_NET_TRACE=1 (diagnostics): the first 40 messages each way per context, every later one >= 100 B up to 200 per
+// direction: length, DcNet header type (+0xe, net.md 4.2) and the first 48 bytes (16-B DcNet header + the start of
+// the payload, i.e. the first NetCtrl command header for type 0).
+bool trace_on() {
+    static const bool on = [] {
+        const char* e = std::getenv("DCP_NET_TRACE");
+        return e && *e && std::strcmp(e, "0") != 0;
+    }();
+    return on;
+}
+// $DCP_NET_DELAY_MS (diagnostics): hold every received message this long before the game can read it, i.e. a
+// one-way latency on top of the real one (set it on both instances for an RTT of twice the value).
+std::chrono::milliseconds rx_delay() {
+    static const std::chrono::milliseconds d = [] {
+        const char* e = std::getenv("DCP_NET_DELAY_MS");
+        return std::chrono::milliseconds(e ? std::strtol(e, nullptr, 10) : 0);
+    }();
+    return d;
+}
+bool rx_ready(const Ctx& x) { return !x.rx.empty() && x.rx_at.front() <= std::chrono::steady_clock::now(); }
+
+void trace_msg(const char* dir, int32_t ctx, uint64_t index, const uint8_t* d, size_t n) {
+    if (!trace_on() || index >= 200 || (index >= 40 && n < 100)) return;
+    char hex[48 * 2 + 1];
+    size_t k = n < 48 ? n : 48;
+    for (size_t i = 0; i < k; ++i) std::snprintf(hex + 2 * i, 3, "%02x", d[i]);
+    hex[2 * k] = 0;
+    std::fprintf(stderr, "NETTRACE rudp ctx %d %s #%llu len %zu type %d: %s\n", ctx, dir, (unsigned long long)index, n,
+                 n > 0xe ? d[0xe] : -1, hex);
+}
+
 Ctx* ctx_for(int32_t sock, ConnId c) {
     auto s = g_socks.find(sock);
     if (s == g_socks.end()) return nullptr;
@@ -60,6 +93,13 @@ Ctx* ctx_for(int32_t sock, ConnId c) {
     if (m == s->second.conn_ctx.end()) return nullptr;
     auto it = g_ctx.find(m->second);
     return it == g_ctx.end() ? nullptr : &it->second;
+}
+
+int32_t s_ctx_of(int32_t sock, ConnId c) {
+    auto s = g_socks.find(sock);
+    if (s == g_socks.end()) return -1;
+    auto m = s->second.conn_ctx.find(c);
+    return m == s->second.conn_ctx.end() ? -1 : m->second;
 }
 
 void SockSink::on_connected(ConnId c) {
@@ -74,6 +114,8 @@ void SockSink::on_message(ConnId c, const uint8_t* d, size_t n) {
     std::lock_guard<std::mutex> lk(g_mu);
     if (Ctx* x = ctx_for(sock, c); x && x->st != CtxState::Closed) {
         x->rx.emplace_back(d, d + n);
+        x->rx_at.push_back(std::chrono::steady_clock::now() + rx_delay());
+        trace_msg("in", s_ctx_of(sock, c), x->rx_msgs, d, n);
         if (x->rx_msgs++ == 0) std::fprintf(stderr, "RUDP socket %d conn %d first message in (%zu bytes)\n", sock, c, n);
         x->rx_bytes += n;
     }
@@ -97,7 +139,7 @@ Carrier* carrier_of(const Ctx& x) {
 
 uint16_t events_of(const Ctx& x) {
     uint16_t e = 0;
-    if (!x.rx.empty()) e |= kEvRead;
+    if (rx_ready(x)) e |= kEvRead;
     if (x.st == CtxState::Connected) {
         Carrier* c = carrier_of(x);
         if (c && c->queued_bytes(x.conn) < x.sndbuf) e |= kEvWrite;
@@ -206,10 +248,12 @@ int32_t read(int32_t ctx, void* buf, size_t len) {
     if (it == g_ctx.end()) return kErrInvalid;
     Ctx& x = it->second;
     if (x.rx.empty()) return x.st == CtxState::Closed ? kErrClosed : kErrWouldBlock;
+    if (!rx_ready(x)) return kErrWouldBlock;
     auto& m = x.rx.front();
     size_t n = m.size() < len ? m.size() : len;  // a message longer than buf is truncated (game buf = 0x40000)
     if (n) std::memcpy(buf, m.data(), n);
     x.rx.pop_front();
+    x.rx_at.pop_front();
     return int32_t(n);
 }
 
@@ -226,6 +270,7 @@ int32_t write(int32_t ctx, const void* buf, size_t len) {
     size_t q = c->queued_bytes(x.conn);
     if (q > 0 && q + len > x.sndbuf) return kErrWouldBlock;  // an empty queue always takes one whole message
     if (!c->send(x.conn, static_cast<const uint8_t*>(buf), len)) return kErrClosed;
+    trace_msg("out", ctx, x.tx_msgs, static_cast<const uint8_t*>(buf), len);
     if (x.tx_msgs++ == 0) std::fprintf(stderr, "RUDP ctx %d first message out (%zu bytes)\n", ctx, len);
     x.tx_bytes += len;
     return int32_t(len);

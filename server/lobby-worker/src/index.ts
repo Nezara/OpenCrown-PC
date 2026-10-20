@@ -12,11 +12,17 @@
 //
 // The lobby is public, so every input is capped (lobby_protocol.md 4.5): sizes and counts well above what the game,
 // the launcher and port/tests/test_lobby.cpp send, message / room-op rate per connection, sockets and new accounts
-// per client IP. A tripped limit answers ERR_LIMIT; the socket stays open (the game has no reconnect).
+// per client IP. A tripped limit answers ERR_LIMIT; the socket stays open.
+//
+// Seat grace (lobby_protocol.md 1.1): a verified member whose socket closes keeps its seat for AWAY_GRACE_MS (a DO
+// alarm), with the room events meant for it held, so a client that reconnects and sends `resume` carries on as if
+// nothing happened; its P2P links to the others never depended on us.
 
 export interface Env {
   LOBBY: DurableObjectNamespace;
   REPORTS_TOKEN?: string; // `wrangler secret put REPORTS_TOKEN`: enables GET/DELETE /reports (bug reports, 4.4)
+  SEAT_GRACE_MS?: string; // wrangler.jsonc "vars": seat grace in ms (1.1), default AWAY_GRACE_MS; "0" = PSN-like, a
+  // closed socket leaves its room at once
 }
 
 export default {
@@ -141,7 +147,11 @@ const MSG_PER_S = 20;
 const ROOM_OP_BURST = 30; // and over create_room / join / leave / search
 const ROOM_OP_PER_S = 1;
 const NEW_ACCOUNTS_PER_IP = 20; // verified accounts registered per client IP, rolling 24 h
-const ROOM_OPS = new Set(["create_room", "join", "leave", "search"]);
+const ROOM_OPS = new Set(["create_room", "join", "leave", "search", "resume"]);
+// Seat grace (1.1): longer than the client's 25 s of reconnect tries; at most MAX_HELD_EVENTS events held per seat.
+// Env SEAT_GRACE_MS overrides it ("0" = off: a close is a leave, as before).
+const AWAY_GRACE_MS = 30000;
+const MAX_HELD_EVENTS = 32;
 const FRIEND_OPS = new Set(["friend_code", "friend_request", "friend_requests", "friend_accept", "friend_decline",
   "friend_remove", "friend_list"]);
 
@@ -196,6 +206,9 @@ interface Member {
   name: string;
   join_ms: number;
   bin: Attr[];
+  // Seat held after the socket closed (1.1): until = unix ms when it is dropped, held = room events for it in order,
+  // over = more than MAX_HELD_EVENTS arrived (resume refused).
+  away?: { until: number; held: Json[]; over?: boolean };
 }
 interface Room {
   id: string;
@@ -277,8 +290,11 @@ export class Lobby implements DurableObject {
   private rooms = new Map<string, Room>();
   private ipSalt: string;
   private ipHmac: Promise<CryptoKey> | null = null;
+  private graceMs: number;
 
-  constructor(private ctx: DurableObjectState, _env: Env) {
+  constructor(private ctx: DurableObjectState, env: Env) {
+    const g = Number(env.SEAT_GRACE_MS ?? AWAY_GRACE_MS);
+    this.graceMs = Number.isFinite(g) && g > 0 ? Math.min(g, 300000) : 0;
     this.sql = ctx.storage.sql;
     this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v INTEGER)");
     // Text values (meta.v is INTEGER: a digits-only text would be converted). ip_salt: the HMAC key of every stored
@@ -310,9 +326,20 @@ export class Lobby implements DurableObject {
       const r = JSON.parse(row.data as string) as Room;
       this.rooms.set(r.id, r);
     }
-    // Members whose socket vanished while we were evicted (object restart) are dropped like a disconnect.
+    // Members whose socket vanished while we were evicted (object restart) keep their seat for a fresh grace, like a
+    // close (1.1): a restart usually drops every socket at once, and their clients reconnect within seconds.
+    // Grace off: dropped like a disconnect at once.
     for (const r of [...this.rooms.values()])
-      for (const mid of mids(r)) if (!this.conn(r.members[mid].cid)) this.removeMember(r, mid, 2);
+      for (const mid of mids(r)) {
+        const m = r.members[mid];
+        if (this.conn(m.cid)) continue;
+        if (!this.graceMs) this.removeMember(r, mid, 2);
+        else if (!m.away) {
+          m.away = { until: Date.now() + this.graceMs, held: [] };
+          this.persist(r);
+        }
+      }
+    this.scheduleAlarm();
   }
 
   // HMAC-SHA256(ip_salt, ipKey(ip)) as hex: what SQLite keeps instead of an address.
@@ -367,12 +394,20 @@ export class Lobby implements DurableObject {
     this.send(ws, { ...body, ev });
   }
   private roomEvent(r: Room, ev: string, body: Json, exceptCid = "") {
+    let held = false;
     for (const mid of mids(r)) {
-      const cid = r.members[mid].cid;
-      if (cid === exceptCid) continue;
-      const o = this.conn(cid);
+      const m = r.members[mid];
+      if (m.cid === exceptCid) continue;
+      if (m.away) { // seat in grace: kept for its resume (1.1)
+        if (m.away.held.length < MAX_HELD_EVENTS) m.away.held.push({ ...body, ev });
+        else m.away.over = true;
+        held = true;
+        continue;
+      }
+      const o = this.conn(m.cid);
       if (o) this.event(o.ws, ev, body);
     }
+    if (held && this.rooms.has(r.id)) this.persist(r);
   }
 
   // ---- persistence ----
@@ -475,6 +510,78 @@ export class Lobby implements DurableObject {
     this.save(ws, c);
     if (r && r.members[mid]) this.removeMember(r, mid, cause);
   }
+  // Seat grace (1.1): c's socket closed while in a room; the seat stays, nobody is told, events are held for it.
+  private holdSeat(ws: WebSocket, c: Conn) {
+    const r = this.rooms.get(c.room);
+    const m = r?.members[c.member];
+    c.room = "";
+    c.member = 0;
+    this.save(ws, c);
+    if (!r || !m) return;
+    m.away = { until: Date.now() + this.graceMs, held: [] };
+    this.persist(r);
+    this.scheduleAlarm();
+  }
+  // The alarm fires at the earliest seat grace end; none left = no alarm.
+  private scheduleAlarm() {
+    let next = Infinity;
+    for (const r of this.rooms.values())
+      for (const mid of mids(r)) {
+        const a = r.members[mid].away;
+        if (a) next = Math.min(next, a.until);
+      }
+    if (next === Infinity) void this.ctx.storage.deleteAlarm();
+    else void this.ctx.storage.setAlarm(next);
+  }
+  async alarm() {
+    return this.enqueue(() => {
+      const now = Date.now();
+      for (const r of [...this.rooms.values()])
+        for (const mid of mids(r)) {
+          const a = r.members[mid]?.away;
+          if (a && a.until <= now) this.removeMember(r, mid, 2); // grace over: a disconnect after all
+        }
+      this.scheduleAlarm();
+    });
+  }
+  // `resume` (1.1): a reconnected client retakes its seat; the held events follow the response.
+  private resume(ws: WebSocket, c: Conn, j: Json, reply: (body: Json, err?: number) => void) {
+    if (!c.verified) return reply({}, ERR_UNVERIFIED);
+    if (c.room) return reply({}, ERR_IN_ROOM);
+    const r = this.rooms.get(u64(j.room_id).toString());
+    const mid = int(j.member_id) & 0xffff;
+    const m = r?.members[mid];
+    if (!r || !m || m.account !== c.account) return reply({}, ERR_NO_ROOM);
+    if (m.away?.over) { // missed too much to carry on: drop it now
+      this.removeMember(r, mid, 2);
+      this.scheduleAlarm();
+      return reply({}, ERR_NO_ROOM);
+    }
+    if (!m.away) { // the old socket still looks open (half-open TCP): the new one takes over, no leave
+      const old = this.conn(m.cid);
+      if (old && old.ws !== ws) {
+        old.c.room = "";
+        old.c.member = 0;
+        this.save(old.ws, old.c);
+        try {
+          old.ws.close(1000, "resumed elsewhere");
+        } catch {
+          /* closed already */
+        }
+      }
+    }
+    const held = m.away?.held ?? [];
+    c.room = r.id;
+    c.member = mid;
+    this.save(ws, c);
+    m.cid = c.cid;
+    m.name = c.name;
+    delete m.away;
+    this.persist(r);
+    this.scheduleAlarm();
+    reply({ room: this.roomInternal(r), member_id: mid });
+    for (const e of held) this.send(ws, e);
+  }
   // Puts c into r. The attachment is saved first: if that fails nothing changed, so no member without a connection
   // that knows it is in the room (a ghost nobody can remove until the object restarts).
   // The creator always gets in (a CLOSED flag on create only keeps others out).
@@ -562,7 +669,10 @@ export class Lobby implements DurableObject {
   private drop(ws: WebSocket) {
     const c = ws.deserializeAttachment() as Conn | null;
     if (!c || c.cid === "") return; // dropped already (close after error)
-    if (c.room) this.leaveRoom(ws, c, 2);
+    if (c.room) {
+      if (c.verified && this.graceMs) this.holdSeat(ws, c); // 1.1: the client may resume within the grace
+      else this.leaveRoom(ws, c, 2);
+    }
     const wasPresent = c.hello && c.verified && c.presence !== false;
     c.cid = ""; // marks the attachment as gone: no presence, no events
     this.save(ws, c);
@@ -912,6 +1022,8 @@ export class Lobby implements DurableObject {
         this.signalAll(r, { ws, c });
         return;
       }
+      case "resume":
+        return this.resume(ws, c, j, reply);
       case "leave":
         if (!c.room || ("room_id" in j && u64(j.room_id).toString() !== c.room)) return reply({}, ERR_NO_ROOM);
         this.leaveRoom(ws, c, 0);

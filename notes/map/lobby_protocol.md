@@ -17,10 +17,29 @@ exactly this; when the two disagree, fix one and update this file.
   `ws://127.0.0.1:47834/`; the launcher will set it). The game connects lazily on its first lobby request, i.e. only
   when the player goes online (`sceNpMatching2ContextStart`). Offline play never connects.
 - Client pings every 20 s (WebSocket ping); the server answers pongs and may ping too.
-- No reconnect within a session: if the socket drops, every pending request fails with `err = 0x80550c01` and the game
-  gets "room destroyed" + context "start over" (it then leaves online play on its own).
+- Reconnect (1.1): if an established socket drops, the client reconnects silently for up to 25 s, sends a new `hello`
+  and, when it was in a room, `resume`s its seat. Requests already sent when the link dropped fail with
+  `err = 0x80550c01` (their answer is lost); requests made meanwhile wait and go out once the seat is back. Only when
+  every try fails does the game get "room destroyed" + context "start over" (it then leaves online play on its own).
+  A first connect that fails is not retried (lobby unreachable at launch: the game stays offline).
+- The client also treats 45 s without any frame from the server as a drop (it pings every 20 s, the server pongs).
 - 64-bit ids (room ids, account ids) are **decimal strings** (JSON numbers lose precision above 2^53). Binary
   attributes are lower-case **hex strings**. All other numbers are plain JSON integers.
+
+### 1.1 Reconnect and seat grace
+Game traffic is direct P2P, so a lobby-only blip need not end the match. When a socket that is in a room closes and
+its connection is **verified** (4.1), the server keeps the member's seat for **30 s** instead of removing it: nothing is
+sent to the others, and room events meant for that member (`member_joined`, `member_left`, `owner_changed`,
+`room_internal_updated`, `signal_dead`; at most 32) are held for it. Within the grace the client sends `hello` on a new
+socket, then `resume {room_id, member_id}`: the server checks the account, gives the seat to the new connection,
+answers `{room: RoomInternal, member_id}` and then delivers the held events in order, as ordinary events. The client
+then re-sends `endpoint`, which re-signals the room (peers keep their first endpoint, section 5).
+If the grace runs out (or more than 32 events piled up), the member is removed as a disconnect (`signal_dead`,
+`owner_changed`, `member_left` cause 2), exactly as before, and a late `resume` gets `0x80550d0f`. The client then
+reports "room destroyed" to the game with the link up, so the game can go online again at its next stage.
+If the old socket still looks open when `resume` arrives (half-open TCP), the new connection takes the seat and the old
+socket is closed without a leave. Unverified connections have no grace (a close is a leave). An object restart keeps
+the seats of members whose socket vanished, with a fresh grace.
 
 ## 2. Envelope
 - Request (client -> server): `{"op": "<name>", "rid": <int>, ...}`. `rid` is chosen by the client, unique per
@@ -59,6 +78,7 @@ exactly this; when the two disagree, fix one and update this file.
 | `search` | `world_id`, `start` (1-based), `max` (<= 20), `flag_filter`, `flag_attr`, `filters: [{id, op, value}]`, `attr_ids`, optional `join_code` | `total`, `start`, `rooms: [RoomExternal]` | see below |
 | `join` | `room_id` or `join_code`, optional `member_bin_internal` | `room`, `member_id` | errors: not found 0x80550d0f, full 0x80550d19, closed 0x80550d15, already in a room 0x80550c06 |
 | `leave` | `room_id` | - | |
+| `resume` | `room_id`, `member_id` | `room`, `member_id` | after a reconnect (1.1): retake a seat held in grace. Verified connections only (0x80550c08); already in a room 0x80550c06; no such room / seat, other account or grace over 0x80550d0f. Held events follow the response |
 | `set_room_internal` | `room_id`, `flag_filter`, `flag_attr`, `bin_internal` | - | merges attrs by id; flags: `(old & ~filter) | (attr & filter)`; others get `room_internal_updated` |
 | `set_room_external` | `room_id`, `int_attrs`, `bin_external` | - | merges by id; no event |
 | `kick` | `room_id`, `member_id` | - | owner only (0x80550c05); target gets `kicked`, the rest `member_left` (cause 1) |
@@ -145,8 +165,8 @@ salt (SQLite `secrets.ip_salt`), for the per-IP limit, and blanked on rows older
 
 ### 4.5 Limits (Worker)
 The public lobby caps every input. All caps sit well above what the game (via `hle/matching2.cpp`), the launcher and
-`port/tests/test_lobby.cpp` send; a tripped limit answers `0x80550c0a` and leaves the socket open (the game has no
-reconnect). Malformed input stays `0x80550c02`.
+`port/tests/test_lobby.cpp` send; a tripped limit answers `0x80550c0a` and leaves the socket open (the client only
+reconnects after a drop). Malformed input stays `0x80550c02`.
 - **Names**: `hello.name` loses control characters (< 0x20, 0x7f) and is cut to 16 characters (the game's online id).
 - **Bin attrs** (room `bin_internal` / `bin_external`, `member_bin_internal`): data must be hex of whole bytes
   (`0x80550c02`; stored lower-case); <= 0x100 B per attr and <= 16 attrs per array, also after a `set_room_*` merge.
@@ -235,8 +255,8 @@ Implemented in `server/lobby-worker` (README there): one global SQLite-backed Du
 Hibernation API; rooms in SQLite, per-connection state in the socket attachment, friends persisted per account.
 Clients reach it as `wss://<name>.<subdomain>.workers.dev/` (LobbyClient TLS: `port/src/net/tls.*`).
 - One Durable Object per world (or one global) holding rooms in memory; a room's state is small (<= 4 members, a few
-  hundred bytes of attrs). WebSocket hibernation is fine: the protocol has no server timers except dropping members
-  whose socket closes (treat close = `leave` with cause 2, including owner migration).
+  hundred bytes of attrs). WebSocket hibernation is fine: the only server timer is the seat grace (1.1, a Durable
+  Object alarm); when it runs out the member is dropped like a `leave` with cause 2, including owner migration.
 - `your_ip` / default endpoint IP: use `CF-Connecting-IP`. That is the public IP but **not** the public UDP port; the
   client must learn its mapped UDP port (STUN to stun.cloudflare.com from the P2P socket, or UPnP) and send `endpoint`
   before peers can connect. Until then `hello.udp_port` (the local port) is only right on a LAN / with UPnP.

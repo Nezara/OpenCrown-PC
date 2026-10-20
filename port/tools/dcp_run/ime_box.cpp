@@ -89,6 +89,14 @@ void ImeBox::frame(SDL_Window* win) {
         dcp::hle::ImeRequest r;
         if (dcp::hle::ime_pending(&r)) {
             id_ = r.id, max_ = r.max_len ? r.max_len : 16, title_ = r.title, focus_ = true, blocking_ = true;
+            // ImGui only saw input while the last box was open, so the Enter that closed it is still "held" there and
+            // its key repeat would close this one at once (empty text = cancel). Start from a clean slate, and take
+            // no OK / cancel until the key that opened this box is released.
+            ImGuiIO& io = ImGui::GetIO();
+            io.ClearEventsQueue();
+            io.ClearInputKeys();
+            io.ClearInputMouse();
+            armed_ = false;
             size_t n = std::min(r.text.size(), sizeof buf_ - 1);
             std::memcpy(buf_, r.text.data(), n);
             buf_[n] = 0;
@@ -134,6 +142,10 @@ void ImeBox::frame(SDL_Window* win) {
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+    if (!armed_) {
+        armed_ = !any_input_held();
+        done = cancel = false;
+    }
     if (done || cancel) {
         std::string text = buf_;
         // An empty name is not something the PS4 keyboard hands back for these fields: treat it as cancel.

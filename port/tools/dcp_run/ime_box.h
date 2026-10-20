@@ -23,6 +23,7 @@ private:
     bool blocking_ = false;
     uint64_t id_ = 0;       // request being edited (0 = none)
     bool focus_ = false;    // give the text field keyboard focus on the next frame
+    bool armed_ = false;    // every key / button held when the box opened has been released
     uint32_t max_ = 0;
     std::string title_;
     char buf_[512] = {};

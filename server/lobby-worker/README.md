@@ -75,6 +75,12 @@ npx wrangler deploy
 The first deploy creates the Worker and the `Lobby` Durable Object class (migration `v1`). Later deploys keep the
 stored rooms/friends. Never delete or rename the `v1` migration; add a new tagged migration for class changes.
 
+## Seat grace (reconnect)
+
+A verified player whose socket drops keeps their room seat for 30 s (`"vars": {"SEAT_GRACE_MS": "30000"}` in
+`wrangler.jsonc`); the game reconnects and `resume`s it, and the other players notice nothing (lobby_protocol.md 1.1).
+Set it to `"0"` for the old behaviour: a dropped socket leaves its room at once. One alarm per grace that runs out.
+
 ## Bug reports
 
 The launcher's Report a Bug tab sends a short note plus the tail of the last game log through the lobby

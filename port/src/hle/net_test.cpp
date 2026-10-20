@@ -43,7 +43,7 @@ uint64_t g_cmd = 0, g_in_room_at = 0;
 int32_t g_filter = -1;
 uint64_t g_start = 1200, g_t = 0;
 int g_logged_inroom = -1;
-bool g_had_room = false, g_had_member = false;
+bool g_had_room = false, g_had_member = false, g_ac_done = false;
 
 uint64_t eb(uint64_t off) { return config().eboot_base + off; }
 template <class T> T rd(uint64_t a) {
@@ -266,6 +266,27 @@ void net_test_tick() {
                          "%u, err %d / 0x%x)\n", (unsigned long long)now, inroom, members, done ? "finished" : "running",
                          rd<uint8_t>(matching + 0x5b), rd<int32_t>(matching + 0x5c4), rd<uint32_t>(matching + 0x510));
             g_logged_inroom = key;
+        }
+        // What the menu's FriendsRoomState does next (50fc90 -> FUN_00514380 first frame): FUN_000a0200(platform sys)
+        // = if DcNetIf slot 0x128 (live link to the room owner) and sys mode != 3: sys SetMode(3) = the connect check
+        // FUN_0009f550, which then puts the Act into AcceptConnect (load of the host's scene). Without this call the
+        // headless joiner just idles in the room. DCP_NET_TEST_AC=0 skips it (the old driver behaviour). Called only
+        // once the game's own first check (sys mode 2 = FUN_0009f1e0, query 0x3ec -> answer 0x3ed) has stored the
+        // owner's slot at sys+0x168f4: earlier, 9f550 fails at once with error 0xc (slot ids 0xff) and leaves.
+        if (done && inroom && members >= 2 && !g_ac_done) {
+            const char* ac = std::getenv("DCP_NET_TEST_AC");
+            uint64_t gsys = rd<uint64_t>(eb(0xc1dc40));
+            uint64_t ps = gsys ? rd<uint64_t>(gsys + 0x78) : 0;
+            if (ac && !std::strcmp(ac, "0")) {
+                g_ac_done = true;
+            } else if (ps && rd<int32_t>(ps + 0x168f4) != 0xff) {
+                bool ok = reinterpret_cast<Fn1>(eb(0xa0200))(ps) & 0xff;
+                if (ok || now - g_t > 900) {
+                    std::fprintf(stderr, "NETTEST vblank %llu: EnterAcceptConnectIfGuest(a0200) -> %d (ps mode %u)\n",
+                                 (unsigned long long)now, int(ok), rd<uint8_t>(ps + 0x5b));
+                    g_ac_done = true;
+                }
+            }
         }
         break;
     }

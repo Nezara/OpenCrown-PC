@@ -45,8 +45,9 @@ int main(int argc, char** argv) {
         if (!std::strcmp(argv[i], "--port") && i + 1 < argc) o.port = uint16_t(std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--lan")) o.loopback_only = false;
         else if (!std::strcmp(argv[i], "--quiet")) o.verbose = false;
+        else if (!std::strcmp(argv[i], "--grace") && i + 1 < argc) o.grace_ms = std::atoi(argv[++i]);
         else {
-            std::fprintf(stderr, "usage: dcp_lobby [--port N] [--lan] [--quiet]\n"
+            std::fprintf(stderr, "usage: dcp_lobby [--port N] [--lan] [--quiet] [--grace MS (seat grace, 0 = off)]\n"
                                  "       dcp_lobby friend <url> <user_dir> <name> [request <code> | accept <account_id>]\n");
             return 2;
         }

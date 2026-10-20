@@ -126,7 +126,17 @@ struct Room {
     std::map<uint16_t, Attrs> member_bin;
     std::map<int, int64_t> int_attrs;
     Attrs bin_internal, bin_external;
+    // Seats in grace (1.1): their socket closed, members[mid] = 0 until a resume or the grace ends.
+    struct Away {
+        int64_t until = 0;
+        uint64_t account = 0;
+        std::string name;
+        std::vector<Json> held;  // room events for it, in order
+        bool over = false;       // more than kMaxHeld arrived: resume refused
+    };
+    std::map<uint16_t, Away> away;
 };
+constexpr size_t kMaxHeld = 32;
 
 }  // namespace
 
@@ -181,9 +191,20 @@ struct LobbyServer::Impl {
         send_json(c, body);
     }
     void room_event(Room& r, const std::string& ev, const Json& body, int except = 0) {
-        for (auto& [mid, cid] : r.members)
+        for (auto& [mid, cid] : r.members) {
+            if (auto aw = r.away.find(mid); aw != r.away.end()) {  // seat in grace: held for its resume (1.1)
+                if (aw->second.held.size() < kMaxHeld) {
+                    Json e = body;
+                    e["ev"] = ev;
+                    aw->second.held.push_back(std::move(e));
+                } else {
+                    aw->second.over = true;
+                }
+                continue;
+            }
             if (cid != except)
                 if (Client* m = by_id(cid)) event(*m, ev, body);
+        }
     }
 
     std::string new_code() {
@@ -347,8 +368,9 @@ struct LobbyServer::Impl {
         Json m;
         Client* c = by_id(r.members.at(mid));
         m["member_id"] = int(mid);
-        m["account_id"] = u64_str(c ? c->account : 0);
-        m["name"] = c ? c->name : "";
+        auto aw = r.away.find(mid);
+        m["account_id"] = u64_str(c ? c->account : aw != r.away.end() ? aw->second.account : 0);
+        m["name"] = c ? c->name : aw != r.away.end() ? aw->second.name : "";
         m["join_ms"] = r.joined.at(mid);
         m["nat"] = 2;
         auto it = r.member_bin.find(mid);
@@ -391,8 +413,9 @@ struct LobbyServer::Impl {
         j["flag_attr"] = int64_t(room_flags(r));
         j["join_code"] = r.code;
         Client* o = r.members.count(r.owner) ? by_id(r.members[r.owner]) : nullptr;
-        j["owner_account_id"] = u64_str(o ? o->account : 0);
-        j["owner_name"] = o ? o->name : "";
+        auto aw = r.away.find(r.owner);
+        j["owner_account_id"] = u64_str(o ? o->account : aw != r.away.end() ? aw->second.account : 0);
+        j["owner_name"] = o ? o->name : aw != r.away.end() ? aw->second.name : "";
         j["int_attrs"] = int_attrs_json(r);
         j["bin_external"] = attrs_json(r.bin_external);
         return j;
@@ -417,13 +440,39 @@ struct LobbyServer::Impl {
     }
 
     void leave_room(Client& c, int cause) {
+        uint64_t room = c.room;
+        uint16_t mid = c.member;
+        c.room = 0, c.member = 0;
+        remove_member(room, mid, cause);
+    }
+    // Seat grace (1.1): c's socket closed while in a room; the seat stays, nobody is told, events are held for it.
+    void hold_seat(Client& c) {
         auto it = rooms.find(c.room);
-        c.room = 0;
+        uint16_t mid = c.member;
+        c.room = 0, c.member = 0;
+        if (it == rooms.end() || !it->second.members.count(mid)) return;
+        Room& r = it->second;
+        r.members[mid] = 0;
+        Room::Away& a = r.away[mid];
+        a = Room::Away{};
+        a.until = now_ms() + opt.grace_ms, a.account = c.account, a.name = c.name;
+        if (opt.verbose) std::fprintf(stderr, "LOBBYD room %llu: seat 0x%x held %d ms\n", (unsigned long long)r.id, mid, opt.grace_ms);
+    }
+    void expire_seats() {
+        std::vector<std::pair<uint64_t, uint16_t>> due;
+        int64_t now = now_ms();
+        for (auto& [id, r] : rooms)
+            for (auto& [mid, a] : r.away)
+                if (a.until <= now) due.push_back({id, mid});
+        for (auto [id, mid] : due) remove_member(id, mid, 2);  // grace over: a disconnect after all
+    }
+    // Removes member mid (its connection state is the caller's business): signal_dead, owner_changed, member_left.
+    void remove_member(uint64_t room, uint16_t mid, int cause) {
+        auto it = rooms.find(room);
         if (it == rooms.end()) return;
         Room& r = it->second;
-        uint16_t mid = c.member;
-        c.member = 0;
-        r.members.erase(mid), r.joined.erase(mid), r.member_bin.erase(mid);
+        if (!r.members.count(mid)) return;
+        r.members.erase(mid), r.joined.erase(mid), r.member_bin.erase(mid), r.away.erase(mid);
         if (r.members.empty()) {
             if (opt.verbose) std::fprintf(stderr, "LOBBYD room %llu destroyed (empty)\n", (unsigned long long)r.id);
             rooms.erase(it);
@@ -599,6 +648,36 @@ struct LobbyServer::Impl {
             signal_all(*r, c);
             return;
         }
+        if (op == "resume") {  // 1.1: a reconnected client retakes its seat; the held events follow the response
+            if (!c.verified) return reply(c, j, Json::object(), kErrUnverified);
+            if (c.room) return reply(c, j, Json::object(), kErrInRoom);
+            auto it = rooms.find(j.get("room_id").as_u64());
+            uint16_t mid = uint16_t(j.get("member_id").as_int());
+            if (it == rooms.end() || !it->second.members.count(mid)) return reply(c, j, Json::object(), kErrNoRoom);
+            Room& r = it->second;
+            auto aw = r.away.find(mid);
+            Client* old = aw == r.away.end() ? by_id(r.members[mid]) : nullptr;
+            uint64_t acc = aw != r.away.end() ? aw->second.account : old ? old->account : 0;
+            if (acc != c.account) return reply(c, j, Json::object(), kErrNoRoom);
+            if (aw != r.away.end() && aw->second.over) {  // missed too much to carry on: drop it now
+                remove_member(r.id, mid, 2);
+                return reply(c, j, Json::object(), kErrNoRoom);
+            }
+            if (old && old != &c) {  // the old socket still looks open (half-open TCP): no leave, it just goes
+                old->room = 0, old->member = 0;
+                old->closing = true;
+            }
+            std::vector<Json> held;
+            if (aw != r.away.end()) held = std::move(aw->second.held), r.away.erase(aw);
+            r.members[mid] = c.id;
+            c.room = r.id, c.member = mid;
+            Json b;
+            b["room"] = room_internal(r);
+            b["member_id"] = int(mid);
+            reply(c, j, b);
+            for (Json& e : held) send_json(c, e);
+            return;
+        }
         if (op == "leave") {
             if (!c.room || (j.has("room_id") && j.get("room_id").as_u64() != c.room)) return reply(c, j, Json::object(), kErrNoRoom);
             leave_room(c, 0);
@@ -618,6 +697,8 @@ struct LobbyServer::Impl {
                 k["room_id"] = u64_str(rid);
                 event(*t, "kicked", k);
                 leave_room(*t, 1);
+            } else {
+                remove_member(rid, mid, 1);  // a seat in grace
             }
             return reply(c, j, Json::object());
         }
@@ -699,7 +780,8 @@ struct LobbyServer::Impl {
     }
 
     void drop(Client& c) {
-        if (c.room) leave_room(c, 2);
+        if (c.room && c.verified && opt.grace_ms > 0) hold_seat(c);  // 1.1: the client may resume within the grace
+        else if (c.room) leave_room(c, 2);
         bool was_present = c.hello && c.verified && c.presence;
         c.closing = true;  // no longer present, gets no more events
         if (was_present && !present(c.account)) presence_event(c.account, false);
@@ -823,6 +905,7 @@ void LobbyServer::run(const std::atomic<bool>* stop) {
                 d.clients.erase(id);
             }
         }
+        d.expire_seats();
     }
 }
 

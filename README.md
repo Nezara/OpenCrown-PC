@@ -137,6 +137,37 @@ Everything is in one file: `OpenCrown-Linux-*-x86_64.AppImage` from [Releases](h
 
 On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating through the launcher replaces the AppImage in place, so your Steam shortcut keeps working (the file name keeps its old version number; that's expected).
 
+### Android (beta)
+
+**OpenCrown Mobile** runs the game's **PS Vita** version on Android. It's lighter to run (960×544, a quarter of the pixels of 1080p) and cheaper to translate on phone CPUs (32-bit ARM to 64-bit ARM instead of x86-64). The game already supports touch, and a Vita is far easier to dump than a PS4. It plays online together with OpenCrown PC, and saves move between the two with no conversion.
+
+**What you need**
+
+- An **Android 9 or newer** phone, tablet or handheld with a **64-bit ARM CPU** and **Vulkan 1.1**. A controller is recommended; on-screen controls appear while none is connected.
+- Your own **decrypted** dump of **Dragon's Crown for PS Vita (US, PCSE00019)**: **both** the base game **and** the **1.09 update**. Each one is a folder:
+
+> [!WARNING]
+> **The dump must be decrypted.** A copy straight from a game card, a `.vpk`, a PKG or a folder that still has an `sce_pfs/` folder inside is encrypted, and OpenCrown can't decrypt it and never will. Update your Vita to **1.09** (older updates are refused), then dump the game and the update you own with the usual Vita homebrew tools. Other regions aren't supported yet.
+
+**Install**
+
+1. **Download** `OpenCrownMobile-*-arm64.apk` from [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) on the device (or copy it over from your PC).
+2. **Open the APK** and tap **Install**. The first time, Android asks you to allow installing apps from your browser or file manager: allow it, go back and install. The app isn't from the Play Store, so Play Protect may warn you; choose *Install anyway*.
+3. **Start OpenCrown Mobile** once. When it asks for **All files access**, allow it (it needs it to read the game files you copy in). It creates the folder `Internal storage/OpenCrown/` with `dump/Game/` and `dump/Update/` inside.
+4. **Copy your dump to the device.** Connect it to your PC with a USB cable and choose *File transfer* on the device, then on the PC open the device's `Internal storage/OpenCrown/dump/`:
+   - copy the **contents** of the base game folder into `dump/Game/`, and
+   - copy the **contents** of the 1.09 update folder into `dump/Update/`.
+
+   A VitaShell-style layout works too: copy the `app/PCSE00019` and `patch/PCSE00019` folders into `dump/` as they are.
+5. Back in the launcher, press **Check again** on the **Game** page. Both lines should start with **[ok]** (base game 01.00 and update 1.09 found); if not, the line says what's missing.
+6. Press **Play**. 🎉
+
+**Saves.** On the **Save Folder** page, **Import PC save** brings in a save from OpenCrown on PC (`Documents\Dragons Crown Pro\saves\SAVEDATA00\SAVE0.DAT`; your current save is backed up first), and **Export save** sends your Mobile save wherever you pick (Downloads, a USB stick, Google Drive, ...) to put into that same folder on the PC. No conversion is needed either way.
+
+**Playing.** A controller works like on a Vita, and its buttons can be changed on the **Controls** page. Without a controller, use the on-screen controls; touching the screen moves the fairy pointer. In town, tapping the screen opens the Town Map: that's how the Vita version works. Online play (the **Online** page) uses the same lobby as OpenCrown PC and starts at the stables in town.
+
+Saves, settings and `log.txt` live in `Internal storage/OpenCrown/`. More details in [`android-port/README.md`](android-port/README.md).
+
 ## The launcher
 
 The launcher is a small window with a sidebar. Once your dump is set, it uses the game's own artwork from your dump, so the exe itself contains no game art.
@@ -225,42 +256,6 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 
 > [!NOTE]
 > Online play unlocks at the same point in the story as on PS4/PS5. Taking the story skip on a new character gets you there right away.
-
-### Android (beta)
-
-**OpenCrown Mobile** runs the game's **PS Vita** version on Android. It's lighter to run (960×544, a quarter of the pixels of 1080p) and cheaper to translate on phone CPUs (32-bit ARM to 64-bit ARM instead of x86-64). The game already supports touch, and a Vita is far easier to dump than a PS4. It plays online together with OpenCrown PC, and saves move between the two with no conversion.
-
-**What you need**
-
-- An **Android 9 or newer** phone, tablet or handheld with a **64-bit ARM CPU** and **Vulkan 1.1**. A controller is recommended; on-screen controls appear while none is connected.
-- Your own **decrypted** dump of **Dragon's Crown for PS Vita (US, PCSE00019)**: **both** the base game **and** the **1.09 update**. Each one is a folder:
-
-  | | Folder contents |
-  |---|---|
-  | **Base game** (version 01.00) | `eboot.bin`, `DRACRO.CPK`, `sce_module/`, `sce_sys/`, ... |
-  | **1.09 update** | `eboot.bin`, `DRACRO_PATCH.CPK`, `DRACRO_PATCH_US.CPK`, `sce_module/`, `sce_sys/`, ... |
-
-> [!WARNING]
-> **The dump must be decrypted.** A copy straight from a game card, a `.vpk`, a PKG or a folder that still has an `sce_pfs/` folder inside is encrypted, and OpenCrown can't decrypt it and never will. Update your Vita to **1.09** (older updates are refused), then dump the game and the update you own with the usual Vita homebrew tools. Other regions aren't supported yet.
-
-**Install**
-
-1. **Download** `OpenCrownMobile-*-arm64.apk` from [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) on the device (or copy it over from your PC).
-2. **Open the APK** and tap **Install**. The first time, Android asks you to allow installing apps from your browser or file manager: allow it, go back and install. The app isn't from the Play Store, so Play Protect may warn you; choose *Install anyway*.
-3. **Start OpenCrown Mobile** once. When it asks for **All files access**, allow it (it needs it to read the game files you copy in). It creates the folder `Internal storage/OpenCrown/` with `dump/Game/` and `dump/Update/` inside.
-4. **Copy your dump to the device.** Connect it to your PC with a USB cable and choose *File transfer* on the device, then on the PC open the device's `Internal storage/OpenCrown/dump/`:
-   - copy the **contents** of the base game folder into `dump/Game/`, and
-   - copy the **contents** of the 1.09 update folder into `dump/Update/`.
-
-   A VitaShell-style layout works too: copy the `app/PCSE00019` and `patch/PCSE00019` folders into `dump/` as they are.
-5. Back in the launcher, press **Check again** on the **Game** page. Both lines should start with **[ok]** (base game 01.00 and update 1.09 found); if not, the line says what's missing.
-6. Press **Play**. 🎉
-
-**Saves.** On the **Save Folder** page, **Import PC save** brings in a save from OpenCrown on PC (`Documents\Dragons Crown Pro\saves\SAVEDATA00\SAVE0.DAT`; your current save is backed up first), and **Export save** sends your Mobile save wherever you pick (Downloads, a USB stick, Google Drive, ...) to put into that same folder on the PC. No conversion is needed either way.
-
-**Playing.** A controller works like on a Vita, and its buttons can be changed on the **Controls** page. Without a controller, use the on-screen controls; touching the screen moves the fairy pointer. In town, tapping the screen opens the Town Map: that's how the Vita version works. Online play (the **Online** page) uses the same lobby as OpenCrown PC and starts at the stables in town.
-
-Saves, settings and `log.txt` live in `Internal storage/OpenCrown/`. More details in [`android-port/README.md`](android-port/README.md).
 
 ## Privacy
 

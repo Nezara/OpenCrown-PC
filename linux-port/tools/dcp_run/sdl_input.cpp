@@ -5,8 +5,11 @@
 // Keyboard/mouse bindings come from input.ini (see dcp::kInputDefaults in tools/common/input_defaults.h for names and format). Fairy mode (hold "fairy" or
 // press "fairy_toggle") turns mouse motion into touchpad finger motion; "fairy_tap" is the touchpad click there.
 // Touch screen (touch_screen = on): the fairy flies to the touched point (closed loop on the game's cursor position,
-// touch_math.h), a tap also interacts. Steam Deck (deck_trackpads = on): right trackpad = PS4 touchpad, left pad
-// click = town map; with Steam Input's virtual gamepad active, the trackpad-as-mouse steers the fairy instead.
+// touch_math.h), a tap also interacts. touch_as_mouse: gamescope's left-click touch emulation counts as such a
+// finger. mouse_attacks = off (Steam Deck default):
+// mouse buttons press no pad buttons, so a touch turned into a click is never an attack. Steam Deck (deck_trackpads =
+// on): right trackpad = PS4 touchpad, left pad click = town map; with Steam Input's virtual gamepad active, the
+// trackpad-as-mouse steers the fairy instead.
 #include "sdl_input.h"
 
 #include <SDL3/SDL.h>
@@ -45,6 +48,17 @@ const std::pair<const char*, uint32_t> kButtonActions[] = {
 
 float g_fairy_speed = 1.0f;  // touchpad units per window pixel of mouse motion, x (1920 / window width)
 bool g_touch_screen = true, g_deck_trackpads = true;
+dcp::touch::Tri g_touch_as_mouse = dcp::touch::Tri::Auto, g_mouse_attacks = dcp::touch::Tri::Auto;
+
+// gamescope = Steam Deck Game Mode (same test as the launcher); SteamDeck=1 is set by Steam on the Deck.
+bool under_gamescope() {
+    const char* d = std::getenv("XDG_CURRENT_DESKTOP");
+    return std::getenv("GAMESCOPE_WAYLAND_DISPLAY") || (d && std::strstr(d, "gamescope"));
+}
+bool on_steam_deck() {
+    const char* s = std::getenv("SteamDeck");
+    return (s && std::strcmp(s, "1") == 0) || under_gamescope();
+}
 
 struct Bind {
     int scancode = -1;  // SDL_Scancode, or
@@ -77,6 +91,11 @@ std::map<std::string, std::vector<Bind>> parse(const std::string& text, const st
             std::string v = trim(line.substr(eq + 1));
             bool on = SDL_strcasecmp(v.c_str(), "off") != 0 && v != "0" && SDL_strcasecmp(v.c_str(), "false") != 0;
             (action == "touch_screen" ? g_touch_screen : g_deck_trackpads) = on;
+            continue;
+        }
+        if (action == "touch_as_mouse" || action == "mouse_attacks") {
+            (action == "touch_as_mouse" ? g_touch_as_mouse : g_mouse_attacks) =
+                dcp::touch::parse_tri(trim(line.substr(eq + 1)).c_str());
             continue;
         }
         auto& v = out[action];
@@ -152,11 +171,32 @@ public:
 
     void handle_event(const SDL_Event& e) override {
         if (e.type == SDL_EVENT_GAMEPAD_ADDED || e.type == SDL_EVENT_GAMEPAD_REMOVED) rescan();
-        dev_.set_ignore_mouse(steam_mouse());  // the Steam trackpad mouse belongs to the gamepad: keep pad prompts
+        // The Steam trackpad mouse belongs to the gamepad, touches as mouse are touches, and with mouse attacks off
+        // (Steam Deck) the mouse is not a play device: none of them switch the prompts to keyboard/mouse.
+        dev_.set_ignore_mouse(steam_mouse() || mouse_touch() || !mouse_attacks_);
         dev_.on_event(e);
-        if (g_touch_screen && (e.type == SDL_EVENT_FINGER_DOWN || e.type == SDL_EVENT_FINGER_MOTION ||
-                               e.type == SDL_EVENT_FINGER_UP || e.type == SDL_EVENT_FINGER_CANCELED))
-            on_finger(e);
+        if (e.type == SDL_EVENT_FINGER_DOWN || e.type == SDL_EVENT_FINGER_MOTION || e.type == SDL_EVENT_FINGER_UP ||
+            e.type == SDL_EVENT_FINGER_CANCELED) {
+            const SDL_TouchFingerEvent& f = e.tfinger;
+            native_touch_ = true;
+            int w = 0, h = 0;
+            if (SDL_Window* win = SDL_GetWindowFromID(f.windowID)) SDL_GetWindowSize(win, &w, &h);
+            on_finger(e.type, int64_t(f.fingerID & 0x7fffffffffffffffull), f.x * w, f.y * h, w, h, e.common.timestamp);
+        }
+        // touch_as_mouse: a left press / drag / release is a finger (gamescope's touch emulation).
+        const bool lbtn = (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
+                          e.button.button == SDL_BUTTON_LEFT && e.button.which != SDL_TOUCH_MOUSEID;
+        if (lbtn && (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? mouse_touch() : mouse_finger_)) {
+            mouse_finger_ = e.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            int w = 0, h = 0;
+            if (SDL_Window* win = SDL_GetWindowFromID(e.button.windowID)) SDL_GetWindowSize(win, &w, &h);
+            on_finger(mouse_finger_ ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_FINGER_UP, kMouseFinger, e.button.x, e.button.y, w,
+                      h, e.common.timestamp);
+        } else if (e.type == SDL_EVENT_MOUSE_MOTION && mouse_finger_) {
+            int w = 0, h = 0;
+            if (SDL_Window* win = SDL_GetWindowFromID(e.motion.windowID)) SDL_GetWindowSize(win, &w, &h);
+            on_finger(SDL_EVENT_FINGER_MOTION, kMouseFinger, e.motion.x, e.motion.y, w, h, e.common.timestamp);
+        }
     }
     bool kbm_active() const override { return dev_.kbm(); }
     void set_blocked(bool b) override { blocked_ = b; }
@@ -192,31 +232,30 @@ public:
     }
 
 private:
-    // Touch screen: the first finger down sets the fairy target; a short tap with little travel also interacts.
-    void on_finger(const SDL_Event& e) {
-        const SDL_TouchFingerEvent& f = e.tfinger;
-        int w = 0, h = 0;
-        if (SDL_Window* win = SDL_GetWindowFromID(f.windowID)) SDL_GetWindowSize(win, &w, &h);
-        if (w <= 0 || h <= 0) return;
+    // A finger at window pixel (wx, wy) of a w x h window: a native touch, or the left mouse button under
+    // touch_as_mouse. The first finger down sets the fairy target; a short tap with little travel also interacts.
+    void on_finger(uint32_t type, int64_t id, float wx, float wy, int w, int h, uint64_t ts) {
+        if (!g_touch_screen || w <= 0 || h <= 0) return;
         float gx, gy;
-        dcp::touch::window_to_game(f.x * w, f.y * h, float(w), float(h), &gx, &gy);
+        dcp::touch::window_to_game(wx, wy, float(w), float(h), &gx, &gy);
         std::lock_guard<std::mutex> lk(mu_);
-        if (e.type == SDL_EVENT_FINGER_DOWN) {
+        if (type == SDL_EVENT_FINGER_DOWN) {
             if (finger_down_) return;  // second finger: ignored
-            finger_down_ = true, touch_finger_ = f.fingerID, touch_t0_ = e.common.timestamp, touch_x0_ = gx, touch_y0_ = gy;
+            finger_down_ = true, touch_finger_ = id, touch_t0_ = ts, touch_x0_ = gx, touch_y0_ = gy;
             touch_.press(gx, gy);
             return;
         }
-        if (!finger_down_ || f.fingerID != touch_finger_) return;
-        if (e.type == SDL_EVENT_FINGER_MOTION) { touch_.move(gx, gy); return; }
+        if (!finger_down_ || id != touch_finger_) return;
+        if (type == SDL_EVENT_FINGER_MOTION) { touch_.move(gx, gy); return; }
         finger_down_ = false;
         touch_.move(gx, gy);
-        bool tap = e.type == SDL_EVENT_FINGER_UP && e.common.timestamp - touch_t0_ < 250000000ull &&
+        bool tap = type == SDL_EVENT_FINGER_UP && ts - touch_t0_ < 250000000ull &&
                    std::fabs(gx - touch_x0_) + std::fabs(gy - touch_y0_) < 40.0f;
         touch_.release(tap);
     }
 
     bool steam_mouse() const { return dcp::touch::steam_mouse_mode(g_deck_trackpads, steam_pad_, dev_.kbm()); }
+    bool mouse_touch() const { return dcp::touch::mouse_is_touch(g_touch_as_mouse, gamescope_, native_touch_, rel_); }
 
     void rescan() {
         int n = 0;
@@ -228,8 +267,7 @@ private:
             if (g) pads.push_back(g);
         }
         SDL_free(ids);
-        steam_pad_ = !pads.empty() && dcp::touch::is_steam_virtual_pad(SDL_GetGamepadVendor(pads[0]), SDL_GetGamepadProduct(pads[0]));
-        std::lock_guard<std::mutex> lk(mu_);
+        steam_pad_ = !pads.empty() && dcp::touch::is_steam_virtual_pad(SDL_GetGamepadVendor(pads[0]), SDL_GetGamepadProduct(pads[0]));        std::lock_guard<std::mutex> lk(mu_);
         if (pads.size() != pads_.size()) std::fprintf(stderr, "input: %zu gamepad(s)\n", pads.size());
         pads_ = pads;
     }
@@ -301,6 +339,9 @@ private:
         const bool steam = steam_mouse();
         const bool steam_tap = steam && (mouse & SDL_BUTTON_LMASK);
         if (steam) mouse = 0;
+        if (mouse_touch() || mouse_finger_) mouse &= ~SDL_BUTTON_LMASK;  // touch_as_mouse: the left button is a finger
+        // mouse_attacks off (Steam Deck default): mouse buttons send no pad buttons / sticks; the fairy keys still work.
+        const bool mb = mouse_attacks_;
         bool toggle_now = held("fairy_toggle", keys, mouse, true);
         if (toggle_now && !toggle_was_) fairy_on_ = !fairy_on_;
         toggle_was_ = toggle_now;
@@ -309,8 +350,8 @@ private:
         bool tap = (fairy && held("fairy_tap", keys, mouse, true)) || steam_tap;
         // Right-stick pointer (look keys): pointer_tap is R1, its interact, while a look key is held and for 2 s after.
         const uint64_t now = SDL_GetTicks();
-        if (held("look_up", keys, mouse, !hold) || held("look_down", keys, mouse, !hold) ||
-            held("look_left", keys, mouse, !hold) || held("look_right", keys, mouse, !hold))
+        if (held("look_up", keys, mouse, !hold && mb) || held("look_down", keys, mouse, !hold && mb) ||
+            held("look_left", keys, mouse, !hold && mb) || held("look_right", keys, mouse, !hold && mb))
             look_ms_ = now;
         const bool pointer = !fairy && look_ms_ && now - look_ms_ < 2000;
         bool ptap = pointer && held("pointer_tap", keys, mouse, true);
@@ -336,19 +377,19 @@ private:
             return false;
         };
         for (auto& [name, bit] : kButtonActions)
-            if (down(name, !hold)) s->buttons |= bit;
+            if (down(name, !hold && mb)) s->buttons |= bit;
         if (ptap) s->buttons |= kR1;
         if (s->buttons & kL2) s->l2 = 0xff;
         if (s->buttons & kR2) s->r2 = 0xff;
         auto stick = [&](const char* neg, const char* pos, uint8_t* v) {
-            int d = int(down(pos, !hold)) - int(down(neg, !hold));
+            int d = int(down(pos, !hold && mb)) - int(down(neg, !hold && mb));
             if (d) *v = d > 0 ? 0xff : 0x00;
         };
         stick("move_left", "move_right", &s->lx);
         stick("move_up", "move_down", &s->ly);
         stick("look_left", "look_right", &s->rx);
         stick("look_up", "look_down", &s->ry);
-        if (!fairy && held("town_map", keys, mouse, true)) town_map(s);
+        if (!fairy && held("town_map", keys, mouse, mb)) town_map(s);
 
         // Fairy pointer: the game reads touch motion per tick (deltas of a held finger), so mouse motion moves a
         // virtual finger; near the pad edge it lifts for at least one game read and re-touches at the centre (a lift
@@ -387,15 +428,20 @@ private:
 
     std::map<std::string, std::vector<Bind>> binds_;
     std::unique_ptr<dcp::hle::InputSource> base_;  // scripted source under DCP_TOUCH_TEST, else null
-    DeviceTracker dev_{!SDL_HasGamepad()};  // start on KB/M unless a gamepad is plugged in
+    DeviceTracker dev_{!SDL_HasGamepad() && !on_steam_deck()};  // start on KB/M unless a gamepad is plugged in / Deck
     bool steam_pad_ = false;  // slot 0 is Steam's virtual gamepad (main thread)
     // touch screen (guarded by mu_)
     dcp::touch::TouchLoop touch_;
     bool finger_down_ = false;
-    SDL_FingerID touch_finger_ = 0;
+    int64_t touch_finger_ = 0;
     uint64_t touch_t0_ = 0;
     float touch_x0_ = 0, touch_y0_ = 0;
     const bool touch_log_ = std::getenv("DCP_TOUCH_LOG") != nullptr;
+    // touch_as_mouse (main thread)
+    static constexpr int64_t kMouseFinger = -1;
+    bool native_touch_ = false, mouse_finger_ = false;
+    const bool gamescope_ = under_gamescope();
+    const bool mouse_attacks_ = g_mouse_attacks == dcp::touch::Tri::Auto ? !on_steam_deck() : g_mouse_attacks == dcp::touch::Tri::On;
     bool fairy_on_ = false, toggle_was_ = false, rel_ = false;
     std::atomic<bool> blocked_{false};  // ImeBox open (set on the render loop, read by the game thread too)
     uint64_t look_ms_ = 0;  // SDL_GetTicks when a look key was last held (pointer_tap window)

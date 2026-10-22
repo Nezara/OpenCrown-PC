@@ -58,7 +58,8 @@ int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish
     }
     size_t next_prompt_event = 0;
     // Test hook for the touch screen: DCP_TOUCH_TEST=6300=d:0.5:0.5,6310=m:0.7:0.5,6320=u:0.7:0.5 pushes a finger
-    // down / motion / up at window-normalised (x, y) when that vblank is reached (finger 1 of a virtual touch device).
+    // down / motion / up at window-normalised (x, y) when that vblank is reached (finger 1 of a virtual touch device);
+    // D / M / U = left mouse button down / drag / up there instead (touch_as_mouse).
     struct TouchEv { uint64_t v; char kind; float x, y; };
     std::vector<TouchEv> touch_events;
     if (const char* p = std::getenv("DCP_TOUCH_TEST")) {
@@ -116,6 +117,24 @@ int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish
         for (; next_touch_event < touch_events.size() && f->vblank >= touch_events[next_touch_event].v; ++next_touch_event) {
             const TouchEv& t = touch_events[next_touch_event];
             SDL_Event ev{};
+            if (t.kind == 'D' || t.kind == 'M' || t.kind == 'U') {  // left mouse (gamescope's touch emulation)
+                int w = 1, h = 1;
+                SDL_GetWindowSize(win, &w, &h);
+                ev.type = t.kind == 'D' ? SDL_EVENT_MOUSE_BUTTON_DOWN : t.kind == 'U' ? SDL_EVENT_MOUSE_BUTTON_UP
+                                                                       : SDL_EVENT_MOUSE_MOTION;
+                if (t.kind == 'M') {
+                    ev.motion.timestamp = SDL_GetTicksNS(), ev.motion.windowID = SDL_GetWindowID(win), ev.motion.which = 1;
+                    ev.motion.state = SDL_BUTTON_LMASK, ev.motion.x = t.x * w, ev.motion.y = t.y * h;
+                } else {
+                    ev.button.timestamp = SDL_GetTicksNS(), ev.button.windowID = SDL_GetWindowID(win), ev.button.which = 1;
+                    ev.button.button = SDL_BUTTON_LEFT, ev.button.down = t.kind == 'D', ev.button.clicks = 1;
+                    ev.button.x = t.x * w, ev.button.y = t.y * h;
+                }
+                SDL_PushEvent(&ev);
+                std::fprintf(stderr, "touch: test mouse %c %.3f %.3f at vblank %llu\n", t.kind, t.x, t.y,
+                             (unsigned long long)f->vblank);
+                continue;
+            }
             ev.type = t.kind == 'd' ? SDL_EVENT_FINGER_DOWN : t.kind == 'u' ? SDL_EVENT_FINGER_UP : SDL_EVENT_FINGER_MOTION;
             ev.tfinger.timestamp = SDL_GetTicksNS();
             ev.tfinger.touchID = 1, ev.tfinger.fingerID = 1, ev.tfinger.x = t.x, ev.tfinger.y = t.y, ev.tfinger.pressure = 1;

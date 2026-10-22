@@ -1,6 +1,6 @@
 # OpenCrown Mobile (Android)
 
-The Android build of OpenCrown, **in development (no release yet)**. Unlike the PC and Linux builds it runs the
+The Android build of OpenCrown, **in beta**: `OpenCrownMobile-*-arm64.apk` on the [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) page. Unlike the PC and Linux builds it runs the
 game's **PS Vita** version: the user's own Vita eboot runs under the Dynarmic ARM JIT, every system module it imports
 is our own implementation (HLE), and the picture is drawn with Vulkan. No game files are included; players supply
 their own dump.
@@ -15,7 +15,7 @@ Copy the dump to `Internal storage/OpenCrown/dump/` (the base game in `Game/`, t
 `Internal storage/OpenCrown/`. Saves from OpenCrown PC can be imported on the launcher's Save Folder page.
 
 ## The launcher
-Same pages as the PC launcher: **Game** (dump check), **Save Folder** (import a PC save), **Controls** (controller
+Same pages as the PC launcher: **Game** (dump check), **Save Folder** (import a PC save, export your save for the PC), **Controls** (controller
 buttons, tap an action and press a button; touch-control opacity), **Display**, **Online** (player name, lobby server,
 UPnP, Test connection, friends with friend codes) and **Report a Bug** (with a preview of exactly what is sent).
 

@@ -2,6 +2,7 @@
 #include "net/bug_report.h"
 
 #include <pwd.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -233,6 +234,41 @@ BugReportResult send_bug_report(const std::string& lobby_url, const std::string&
         res.msg = "Report #" + std::to_string(report_r.get("id").as_int()) + " sent. Thank you!";
     }
     return res;
+}
+
+namespace {
+// One short printable-ASCII line.
+std::string ascii_line(std::string s) {
+    for (char& ch : s)
+        if (uint8_t(ch) < 0x20 || uint8_t(ch) >= 0x7f) ch = '?';
+    if (s.size() > 100) s.resize(100);
+    return s;
+}
+}  // namespace
+
+std::string os_description() {
+    // Distribution from os-release (PRETTY_NAME), kernel release and machine from uname - never uname's nodename
+    // (the host name).
+    std::string name;
+    for (const char* p : {"/etc/os-release", "/usr/lib/os-release"}) {
+        std::ifstream f(p);
+        for (std::string line; name.empty() && std::getline(f, line);) {
+            if (line.rfind("PRETTY_NAME=", 0) != 0) continue;
+            name = line.substr(12);
+            if (name.size() >= 2 && (name[0] == '"' || name[0] == '\'') && name.back() == name[0])
+                name = name.substr(1, name.size() - 2);
+        }
+        if (!name.empty()) break;
+    }
+    utsname u{};
+    std::string kernel = uname(&u) == 0 ? std::string("Linux ") + u.release + ", " + u.machine : "Linux";
+    return ascii_line((name.empty() ? "Linux" : name) + " (" + kernel + ")");
+}
+
+std::string report_log(const std::string& log_path, const Identity& id) {
+    std::string tail = log_tail_text(log_path, kBugReportLogMax);
+    // The OS line holds version fields only and skips redaction (a kernel "5.15.153.1" would turn into <ip>).
+    return "OS: " + os_description() + "\n" + (tail.empty() ? "" : "\n" + redact_log(tail, id));
 }
 
 }  // namespace dcp::net

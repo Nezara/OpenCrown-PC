@@ -26,6 +26,15 @@ std::string log_tail_text(const std::string& path, size_t max_bytes);
 // user name and host name ($HOME, <user>, <pc>). The launcher shows this text before sending.
 std::string redact_log(std::string log, const Identity& id);
 
+// The one line about the machine a report carries: OS name, version and architecture ("Windows 11 24H2 (build 26100,
+// x64)", "SteamOS 3.6 (Linux 6.5.0-valve, x86_64)", "Android 14 (API 34, aarch64)"); never host / user names or
+// hardware ids.
+std::string os_description();
+
+// What a report carries as its log, exactly as Preview shows it: "OS: <os_description()>", a blank line and the
+// redacted tail of the log file (kBugReportLogMax bytes; only the OS line when there is no log).
+std::string report_log(const std::string& log_path, const Identity& id);
+
 // True when the identity secret may be sent to this lobby URL: wss://, or plain ws:// to this PC / a LAN address.
 bool lobby_url_safe_for_secret(const std::string& url);
 

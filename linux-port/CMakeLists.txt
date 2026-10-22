@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)  # Ubuntu 22.04 stock cmake
 project(OpenCrownLinux C CXX)
-set(OPENCROWN_VERSION "1.0.3")  # Linux build; versioned separately from the Windows build in ../port
+set(OPENCROWN_VERSION "1.0.4")  # Linux build; versioned separately from the Windows build in ../port
 # Updater end-to-end tests build a fake newer release in a separate build dir (packaging/make-appimage.sh, OC_VERSION).
 if(OPENCROWN_VERSION_OVERRIDE)
   set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")
@@ -18,6 +18,18 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 add_compile_options(-Wall -Wextra)
+# Release files must not carry this PC's paths (mbedTLS and assert() put __FILE__ into the binary): the source tree,
+# the build dir and every FETCHCONTENT_SOURCE_DIR_* override are mapped to neutral names.
+set(DCP_PREFIX_MAPS "${CMAKE_CURRENT_SOURCE_DIR}=." "${CMAKE_BINARY_DIR}=build")
+get_cmake_property(_dcp_cache CACHE_VARIABLES)
+foreach(_v IN LISTS _dcp_cache)
+  if(_v MATCHES "^FETCHCONTENT_SOURCE_DIR_(.+)$" AND NOT "${${_v}}" STREQUAL "")
+    list(APPEND DCP_PREFIX_MAPS "${${_v}}=deps/${CMAKE_MATCH_1}")
+  endif()
+endforeach()
+foreach(_m IN LISTS DCP_PREFIX_MAPS)
+  add_compile_options("-ffile-prefix-map=${_m}")
+endforeach()
 # Everything PIE: dcp_run must not load at 0x400000 itself, that is where the eboot wants to go (loader/elf.cpp).
 include(CheckPIESupported)
 check_pie_supported()

@@ -36,7 +36,13 @@ appimagetool 1.9.1 is downloaded once (pinned by SHA-256).
 - Game, Steam Input on (normal when started from Steam): the right trackpad moves the fairy pointer, its click
   interacts. Steam Input off: right trackpad = fairy pointer, left trackpad click = town map.
 - Touch screen: touching a spot sends the fairy there; a short tap also interacts.
-- Both can be switched off on the launcher's Controls page (`touch_screen`, `deck_trackpads` in input.ini).
+- Game Mode turns touches into left clicks for non-Steam games; those clicks steer the fairy like touches
+  (`touch_as_mouse`, auto = in Game Mode). With Steam Input on, add *Touchscreen Native Support* to the shortcut's
+  controller layout (Action Sets -> Add Always-On command -> System) so the game gets real touches.
+- On a Steam Deck mouse buttons press no game buttons, so a click never attacks (`mouse_attacks`, auto = off on a
+  Deck); the keyboard still works.
+- All of these are on the launcher's Controls page (`touch_screen`, `deck_trackpads`, `touch_as_mouse`,
+  `mouse_attacks` in input.ini).
 
 ## Updates
 The launcher checks the GitHub releases (Update entry at the bottom left), shows the release notes, downloads the

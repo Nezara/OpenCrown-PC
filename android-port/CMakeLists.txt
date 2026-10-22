@@ -13,6 +13,18 @@ endif()
 if(MINGW)
   add_link_options(-static)  # self-contained tools; no MinGW runtime DLLs needed on PATH
 endif()
+# Release files must not carry this PC's paths (mbedTLS and assert() put __FILE__ into the binary): the source tree,
+# the build dir and every FETCHCONTENT_SOURCE_DIR_* override are mapped to neutral names.
+set(DCP_PREFIX_MAPS "${CMAKE_CURRENT_SOURCE_DIR}=." "${CMAKE_BINARY_DIR}=build")
+get_cmake_property(_dcp_cache CACHE_VARIABLES)
+foreach(_v IN LISTS _dcp_cache)
+  if(_v MATCHES "^FETCHCONTENT_SOURCE_DIR_(.+)$" AND NOT "${${_v}}" STREQUAL "")
+    list(APPEND DCP_PREFIX_MAPS "${${_v}}=deps/${CMAKE_MATCH_1}")
+  endif()
+endforeach()
+foreach(_m IN LISTS DCP_PREFIX_MAPS)
+  add_compile_options("-ffile-prefix-map=${_m}")
+endforeach()
 
 include(FetchContent)
 

@@ -9,7 +9,7 @@
 // list. Save Folder page: DCP_SAVE_ROOT. The story / tutorial skip questions are always on (DCP_STORY_SKIP /
 // DCP_TUTORIAL_SKIP=0 in the environment turn them off, hle/skip_offers.h).
 // First start without a chosen save folder asks for one (default or custom). Report a Bug page: a short note (256
-// characters) plus the redacted tail of logs/last_run.log (net/bug_report.h: IPs, ids, user and PC names removed;
+// characters) plus the OS line and the redacted tail of logs/last_run.log (net/bug_report.h: IPs, ids, user and PC names removed;
 // "Preview" shows exactly what is sent), through the lobby, which rate-limits it.
 // Player name: never the login name - an empty name gets a random "PlayerNNNN" on first start.
 // Look: sidebar navigation over the game's own store art (sce_sys/pic0.png background, icon0.png logo), read from the
@@ -202,7 +202,18 @@ struct Controls {
     std::vector<Binding> binds;
     float fairy_speed = 1.0f;
     bool touch_screen = true, deck_trackpads = true;  // "on" / "off" in input.ini
+    int touch_as_mouse = 0, mouse_attacks = 0;  // "auto" / "on" / "off" in input.ini (kTriNames index)
 };
+
+const char* const kTriNames[] = {"auto", "on", "off"};
+int ini_tri(const std::string& v) {
+    if (v == "on" || v == "1" || v == "true") return 1;
+    if (v == "off" || v == "0" || v == "false") return 2;
+    return 0;
+}
+int* tri_field(Controls& c, const std::string& k) {
+    return k == "touch_as_mouse" ? &c.touch_as_mouse : k == "mouse_attacks" ? &c.mouse_attacks : nullptr;
+}
 
 bool ini_on(const std::string& v) { return v != "off" && v != "0" && v != "false"; }
 
@@ -223,6 +234,7 @@ Controls default_controls() {
         if (k == "fairy_speed") c.fairy_speed = std::strtof(v.c_str(), nullptr);
         else if (k == "touch_screen") c.touch_screen = ini_on(v);
         else if (k == "deck_trackpads") c.deck_trackpads = ini_on(v);
+        else if (int* t = tri_field(c, k)) *t = ini_tri(v);
         else c.binds.push_back({k, v});
     });
     return c;
@@ -242,6 +254,7 @@ Controls load_controls(const std::string& path) {
         }
         if (k == "touch_screen") { c.touch_screen = ini_on(v); return; }
         if (k == "deck_trackpads") { c.deck_trackpads = ini_on(v); return; }
+        if (int* t = tri_field(c, k)) { *t = ini_tri(v); return; }
         for (Binding& b : c.binds)
             if (b.action == k) b.value = v;
     });
@@ -264,6 +277,10 @@ bool save_controls(const std::string& path, const Controls& c) {
             std::string s = v;  // "1.00" -> "1.0", "1.25" stays
             while (s.size() > 3 && s.back() == '0' && s[s.size() - 2] != '.') s.pop_back();
             out << k << " = " << s << "\n";
+            continue;
+        }
+        if (int* t = tri_field(const_cast<Controls&>(c), k)) {
+            out << k << " = " << kTriNames[*t] << "\n";
             continue;
         }
         if (k == "touch_screen" || k == "deck_trackpads") {
@@ -695,7 +712,7 @@ struct BugJob {
         running = true, result = {};
         std::string url = trim(s.lobby), name = trim(s.name);
         th = std::thread([this, url, name, id, text, log_path] {
-            std::string log = dcp::net::redact_log(dcp::net::log_tail_text(log_path, dcp::net::kBugReportLogMax), id);
+            std::string log = dcp::net::report_log(log_path, id);
             dcp::net::BugReportResult r = dcp::net::send_bug_report(url, name, id, text, log, "launcher " __DATE__);
             std::lock_guard<std::mutex> lk(mu);
             result = r, running = false, sent_new = r.ok;
@@ -2006,6 +2023,14 @@ int main(int argc, char** argv) {
                 page_entry();
                 ImGui::Checkbox("Touch screen moves the fairy (tap = interact)", &ctl.touch_screen);
                 ImGui::Checkbox("Steam Deck trackpads: right = fairy, left click = town map", &ctl.deck_trackpads);
+                {
+                    static const char* const kClicks[] = {"Auto (Steam Deck Game Mode)", "Always", "Never"};
+                    static const char* const kAttack[] = {"Auto (not on a Steam Deck)", "Always", "Never"};
+                    ImGui::SetNextItemWidth(300 * scale);
+                    ImGui::Combo("Left clicks are fairy touches", &ctl.touch_as_mouse, kClicks, 3);
+                    ImGui::SetNextItemWidth(300 * scale);
+                    ImGui::Combo("Mouse buttons press game buttons", &ctl.mouse_attacks, kAttack, 3);
+                }
                 if (ImGui::Button("Reset to defaults")) { ctl = default_controls(); status = "Defaults restored (not saved yet)."; }
                 ImGui::SameLine();
                 if (ImGui::Button("Save")) status = save_controls(input_path, ctl) ? "Saved " + input_path
@@ -2183,7 +2208,7 @@ int main(int argc, char** argv) {
                 if (ImGui::Button("Preview##bug")) {  // exactly what Send uploads
                     bug_preview = "Note:\n" + trim(bug_text) + "\n\nLog (" + log_path + ", last " +
                                   std::to_string(dcp::net::kBugReportLogMax / 1024) + " KB, redacted):\n" +
-                                  dcp::net::redact_log(dcp::net::log_tail_text(log_path, dcp::net::kBugReportLogMax), ident);
+                                  dcp::net::report_log(log_path, ident);
                     ImGui::OpenPopup("Report preview");
                 }
                 if (!sending && !res.msg.empty()) {
@@ -2193,7 +2218,8 @@ int main(int argc, char** argv) {
                 if (res.left >= 0) ImGui::TextColored(kDim, "Reports left today: %d", res.left);
                 ImGui::Spacing();
                 ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-                ImGui::TextWrapped("Sent: your note, player name and online id, and the last %d KB of the game log%s. "
+                ImGui::TextWrapped("Sent: your note, player name and online id, your OS name and version, and the last %d KB of "
+                                   "the game log%s. "
                                    "IP addresses, other players' ids, your user and PC name are removed first; "
                                    "Preview shows exactly what is sent. Up to 5 reports a day.",
                                    int(dcp::net::kBugReportLogMax / 1024), have_log ? "" : " (no log yet: play once first)");
@@ -2476,7 +2502,7 @@ int main(int argc, char** argv) {
         ss << f.rdbuf();
         f.close();
         ok = ok && ss.str() == dcp::kInputDefaults && r.fairy_speed == d.fairy_speed && r.touch_screen == d.touch_screen &&
-             r.deck_trackpads == d.deck_trackpads;
+             r.deck_trackpads == d.deck_trackpads && r.touch_as_mouse == d.touch_as_mouse && r.mouse_attacks == d.mouse_attacks;
         std::remove(p.c_str());
         if (!ok) return 3;
     }

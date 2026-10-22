@@ -10,10 +10,6 @@
 !/linux-port/
 !/android-port/
 !/server/
-!/Work/
-/Work/*
-!/Work/tools/
-!/Work/ghidra_scripts/
 
 /port/build/
 /port/build*/

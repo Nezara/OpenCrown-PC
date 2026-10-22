@@ -5,7 +5,11 @@
 #include <windows.h>
 #else
 #include <pwd.h>
+#include <sys/utsname.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#endif
 #endif
 
 #include <algorithm>
@@ -263,6 +267,79 @@ BugReportResult send_bug_report(const std::string& lobby_url, const std::string&
         res.msg = "Report #" + std::to_string(report_r.get("id").as_int()) + " sent. Thank you!";
     }
     return res;
+}
+
+namespace {
+// One short printable-ASCII line.
+std::string ascii_line(std::string s) {
+    for (char& ch : s)
+        if (uint8_t(ch) < 0x20 || uint8_t(ch) >= 0x7f) ch = '?';
+    if (s.size() > 100) s.resize(100);
+    return s;
+}
+}  // namespace
+
+#ifdef _WIN32
+std::string os_description() {
+    // RtlGetVersion: GetVersionEx reports Windows 8 to programs without a compatibility manifest.
+    RTL_OSVERSIONINFOW v{};
+    v.dwOSVersionInfoSize = sizeof v;
+    using RtlGetVersionFn = LONG(WINAPI*)(RTL_OSVERSIONINFOW*);
+    auto get = reinterpret_cast<RtlGetVersionFn>(
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion")));
+    if (!get || get(&v) != 0) return "Windows (version unknown)";
+    std::string s = v.dwMajorVersion == 10 ? (v.dwBuildNumber >= 22000 ? "Windows 11" : "Windows 10")
+                                           : "Windows " + std::to_string(v.dwMajorVersion) + "." +
+                                                 std::to_string(v.dwMinorVersion);
+    wchar_t dv[32] = {};  // "24H2"
+    DWORD n = sizeof dv - sizeof dv[0];
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"DisplayVersion",
+                     RRF_RT_REG_SZ, nullptr, dv, &n) == ERROR_SUCCESS && dv[0]) {
+        s += ' ';
+        for (const wchar_t* p = dv; *p; ++p) s += *p < 0x80 ? char(*p) : '?';
+    }
+    SYSTEM_INFO si{};
+    GetNativeSystemInfo(&si);
+    const char* arch = si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ? "x64"
+                       : si.wProcessorArchitecture == 12 ? "ARM64"  // PROCESSOR_ARCHITECTURE_ARM64
+                       : si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_INTEL ? "x86" : "other";
+    return ascii_line(s + " (build " + std::to_string(v.dwBuildNumber) + ", " + arch + ")");
+}
+#elif defined(__ANDROID__)
+std::string os_description() {
+    char rel[PROP_VALUE_MAX] = {}, sdk[PROP_VALUE_MAX] = {};
+    __system_property_get("ro.build.version.release", rel);
+    __system_property_get("ro.build.version.sdk", sdk);
+    std::string s = std::string("Android ") + (rel[0] ? rel : "?") + " (API " + (sdk[0] ? sdk : "?");
+    utsname u{};
+    if (uname(&u) == 0) s += std::string(", ") + u.machine;
+    return ascii_line(s + ")");
+}
+#else
+std::string os_description() {
+    // Distribution from os-release (PRETTY_NAME), kernel release and machine from uname - never uname's nodename
+    // (the host name).
+    std::string name;
+    for (const char* p : {"/etc/os-release", "/usr/lib/os-release"}) {
+        std::ifstream f(p);
+        for (std::string line; name.empty() && std::getline(f, line);) {
+            if (line.rfind("PRETTY_NAME=", 0) != 0) continue;
+            name = line.substr(12);
+            if (name.size() >= 2 && (name[0] == '"' || name[0] == '\'') && name.back() == name[0])
+                name = name.substr(1, name.size() - 2);
+        }
+        if (!name.empty()) break;
+    }
+    utsname u{};
+    std::string kernel = uname(&u) == 0 ? std::string("Linux ") + u.release + ", " + u.machine : "Linux";
+    return ascii_line((name.empty() ? "Linux" : name) + " (" + kernel + ")");
+}
+#endif
+
+std::string report_log(const std::string& log_path, const Identity& id) {
+    std::string tail = log_tail_text(log_path, kBugReportLogMax);
+    // The OS line holds version fields only and skips redaction (a kernel "5.15.153.1" would turn into <ip>).
+    return "OS: " + os_description() + "\n" + (tail.empty() ? "" : "\n" + redact_log(tail, id));
 }
 
 }  // namespace dcp::net

@@ -52,6 +52,12 @@ touch_screen = on
 # deck_trackpads = on (Steam Deck): right trackpad = fairy (click = interact), left trackpad click = town map. With
 # Steam Input on, the right trackpad's mouse steers the fairy while the controller is in use.
 deck_trackpads = on
+# touch_as_mouse: Steam Deck Game Mode turns touches into left clicks unless the shortcut uses Steam's "Touchscreen
+# Native Support". auto = those clicks steer the fairy like touches in Game Mode, on = always, off = never.
+touch_as_mouse = auto
+# mouse_attacks: mouse buttons press game buttons (Mouse1 = square ...). auto = yes, except on a Steam Deck, where the
+# controller is the main input and clicks (also touches turned into clicks) never attack; keys still work. on / off.
+mouse_attacks = auto
 )";
 
 // Per-user settings dir (input.ini, launcher.ini, saves/, logs/): $DCP_USER_DIR if set, else

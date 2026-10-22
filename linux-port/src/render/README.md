@@ -34,7 +34,6 @@
 - Matrices in VS cb0 are row-major with the translation in elements 3/7. Captured: x/640 - 1/960 on a 1280x720 base.
 
 ## Pixel shaders (confirmed from the game's own GCN binaries)
-`Work/tools/gcn.py ps N | vs N` disassembles the pool entries from the user's eboot (own decoder, nothing extracted).
 - Sprite PS (perm bits -> 0x79f890): colour = vertex colour (RGBA8/255 x VS cb7) x texture (0x10/0x20) x mask texture
   (0x20, second texture at the mask uv); then, in this order: **factor** (4) `c += f * (avg(rgb) - c)` (desaturate),
   **colour matrix** (2) `c.r = dot(row0.xyz, c) * row0.w` etc. (3 rows of 4 floats), **gradient** (8) two 32-float

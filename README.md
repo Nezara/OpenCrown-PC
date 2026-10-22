@@ -81,6 +81,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 | | |
 |---|---|
 | **OS** | Windows 10 or 11, 64-bit, **or** 64-bit Linux with glibc 2.35+ (Steam Deck / SteamOS 3.5+, Ubuntu 22.04+, Debian 12+, Fedora, Arch, ...) |
+| **Android (beta)** | Android 9+, 64-bit ARM CPU, Vulkan 1.1, and your own decrypted PS Vita dump (PCSE00019) with the 1.09 update. See [Android](#android-beta). |
 | **GPU** | Anything with OpenGL 3.3 (most GPUs from the last ~12 years) |
 | **CPU** | A modern x86-64 CPU (the game's code runs on it directly) |
 | **Game** | Your own dump of **Dragon's Crown Pro (CUSA10454)** |
@@ -92,6 +93,8 @@ OpenCrown needs the game's files from **a PS4 or PS5 you own**: the **decrypted*
 
 > [!WARNING]
 > **PKG files won't work.** A PKG from the PS4/PS5 or the PlayStation Store is encrypted. OpenCrown can't decrypt it, and it never will. It also won't help you get the game any other way. Dump the copy you own with the usual homebrew tools for your console.
+
+For **OpenCrown Mobile** on Android you need a **PS Vita** dump instead (base game + 1.09 update, decrypted): see [Android](#android-beta).
 
 Your dump is only ever **read**. OpenCrown never writes to it or modifies it; the small patches described below (34 bytes in total) are applied in memory each time you play.
 
@@ -130,6 +133,7 @@ Everything is in one file: `OpenCrown-Linux-*-x86_64.AppImage` from [Releases](h
 4. Open **Steam** → *Games* → **Add a Non-Steam Game to My Library…** → *Browse…* → pick the AppImage → **Add Selected Programs**.
 5. Switch back to **Game Mode** (the *Return to Gaming Mode* icon on the desktop) and start **OpenCrown** from your library.
 6. The launcher works with the controller: **D-pad / stick** to move, **A** to select, **B** to go back, **L1 / R1** to switch pages, **Start** to play. On the **Game** page use **Browse** to find your dump; folders with a complete dump are marked **[dump]** (the SD card has its own button). Press **Steam + X** if you need the on-screen keyboard.
+7. In the game, **tap the touch screen** to send the fairy pointer there and interact (doors, chests); drag to move it. On a Steam Deck the controller is the main input: mouse clicks never attack. With Steam Input on, add **Touchscreen Native Support** to the shortcut's controller layout (*Action Sets → Add Always-On command → System*) so the game gets real touches.
 
 On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating through the launcher replaces the AppImage in place, so your Steam shortcut keeps working (the file name keeps its old version number; that's expected).
 
@@ -144,7 +148,7 @@ The launcher is a small window with a sidebar. Once your dump is set, it uses th
 | **Display** | Windowed or borderless fullscreen, window size, and **4K rendering** (PS4 Pro mode). |
 | **Online** | Your online name, your **friend code**, adding friends by code, incoming and outgoing friend requests, UPnP, a connection test and the lobby server address. |
 | **Save Folder** | Where your saves live. Point it at a folder with a `SAVEDATA00` from your PS4/PS5 to keep playing your console progress. |
-| **Report a Bug** | Sends a short note plus the end of your last log, so problems can be fixed. You can **preview** exactly what is sent first. See [Privacy](#privacy). |
+| **Report a Bug** | Sends a short note, your OS name and version, and the end of your last log, so problems can be fixed. You can **preview** exactly what is sent first. See [Privacy](#privacy). |
 | **Update** | At the bottom left. Shows whether a new version is out and what it fixes; **Download and install** updates OpenCrown in place (the download is checked against its SHA-256 first). The automatic check at start can be switched off there. |
 
 Launcher settings are stored in `launcher.ini` next to your saves and logs.
@@ -222,11 +226,47 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 > [!NOTE]
 > Online play unlocks at the same point in the story as on PS4/PS5. Taking the story skip on a new character gets you there right away.
 
+### Android (beta)
+
+**OpenCrown Mobile** runs the game's **PS Vita** version on Android. It's lighter to run (960×544, a quarter of the pixels of 1080p) and cheaper to translate on phone CPUs (32-bit ARM to 64-bit ARM instead of x86-64). The game already supports touch, and a Vita is far easier to dump than a PS4. It plays online together with OpenCrown PC, and saves move between the two with no conversion.
+
+**What you need**
+
+- An **Android 9 or newer** phone, tablet or handheld with a **64-bit ARM CPU** and **Vulkan 1.1**. A controller is recommended; on-screen controls appear while none is connected.
+- Your own **decrypted** dump of **Dragon's Crown for PS Vita (US, PCSE00019)**: **both** the base game **and** the **1.09 update**. Each one is a folder:
+
+  | | Folder contents |
+  |---|---|
+  | **Base game** (version 01.00) | `eboot.bin`, `DRACRO.CPK`, `sce_module/`, `sce_sys/`, ... |
+  | **1.09 update** | `eboot.bin`, `DRACRO_PATCH.CPK`, `DRACRO_PATCH_US.CPK`, `sce_module/`, `sce_sys/`, ... |
+
+> [!WARNING]
+> **The dump must be decrypted.** A copy straight from a game card, a `.vpk`, a PKG or a folder that still has an `sce_pfs/` folder inside is encrypted, and OpenCrown can't decrypt it and never will. Update your Vita to **1.09** (older updates are refused), then dump the game and the update you own with the usual Vita homebrew tools. Other regions aren't supported yet.
+
+**Install**
+
+1. **Download** `OpenCrownMobile-*-arm64.apk` from [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) on the device (or copy it over from your PC).
+2. **Open the APK** and tap **Install**. The first time, Android asks you to allow installing apps from your browser or file manager: allow it, go back and install. The app isn't from the Play Store, so Play Protect may warn you; choose *Install anyway*.
+3. **Start OpenCrown Mobile** once. When it asks for **All files access**, allow it (it needs it to read the game files you copy in). It creates the folder `Internal storage/OpenCrown/` with `dump/Game/` and `dump/Update/` inside.
+4. **Copy your dump to the device.** Connect it to your PC with a USB cable and choose *File transfer* on the device, then on the PC open the device's `Internal storage/OpenCrown/dump/`:
+   - copy the **contents** of the base game folder into `dump/Game/`, and
+   - copy the **contents** of the 1.09 update folder into `dump/Update/`.
+
+   A VitaShell-style layout works too: copy the `app/PCSE00019` and `patch/PCSE00019` folders into `dump/` as they are.
+5. Back in the launcher, press **Check again** on the **Game** page. Both lines should start with **[ok]** (base game 01.00 and update 1.09 found); if not, the line says what's missing.
+6. Press **Play**. 🎉
+
+**Saves.** On the **Save Folder** page, **Import PC save** brings in a save from OpenCrown on PC (`Documents\Dragons Crown Pro\saves\SAVEDATA00\SAVE0.DAT`; your current save is backed up first), and **Export save** sends your Mobile save wherever you pick (Downloads, a USB stick, Google Drive, ...) to put into that same folder on the PC. No conversion is needed either way.
+
+**Playing.** A controller works like on a Vita, and its buttons can be changed on the **Controls** page. Without a controller, use the on-screen controls; touching the screen moves the fairy pointer. In town, tapping the screen opens the Town Map: that's how the Vita version works. Online play (the **Online** page) uses the same lobby as OpenCrown PC and starts at the stables in town.
+
+Saves, settings and `log.txt` live in `Internal storage/OpenCrown/`. More details in [`android-port/README.md`](android-port/README.md).
+
 ## Privacy
 
 - **The lobby server sees:** your online name, a random account ID, your public IP and port (needed to connect players), your rooms and your friends list. It doesn't see or relay gameplay.
 - **Other players see:** your online name and your IP address, the same as in any peer-to-peer game.
-- **Bug reports** contain your short note and the last part of `last_run.log`. Before sending, your Windows user name, PC name, home folder path and account secret are scrubbed out, and you can preview the whole report first. Reports are rate limited and only kept to fix bugs.
+- **Bug reports** contain your short note, your operating system's name and version (for example `Windows 11 24H2`, `SteamOS 3.6` or `Android 14`; nothing that identifies your device) and the last part of `last_run.log`. Before sending, your Windows user name, PC name, home folder path and account secret are scrubbed out, and you can preview the whole report first. Reports are rate limited and only kept to fix bugs.
 - **Update check:** when the launcher starts it asks GitHub for the list of releases (GitHub sees your IP, nothing else is sent). You can switch this off on the **Update** page.
 - Nothing else is sent anywhere unless you go online or send a bug report.
 
@@ -263,7 +303,7 @@ That gives you `OpenCrownPC Launcher.exe`, `dcp_run.exe` and `SDL3.dll` in `port
 
 **Linux:** the Linux build lives in [`linux-port/`](linux-port) (Ubuntu 22.04 or newer: install the packages listed in [`linux-port/README.md`](linux-port/README.md), then run `./build.sh`; `sh packaging/make-appimage.sh` makes the AppImage).
 
-**Android (in development, no release yet):** OpenCrown Mobile lives in [`android-port/`](android-port). It runs the game's PS Vita version from your own Vita dump and plays online with OpenCrown PC; see [`android-port/README.md`](android-port/README.md).
+**Android (beta):** OpenCrown Mobile lives in [`android-port/`](android-port). It runs the game's PS Vita version from your own Vita dump and plays online with OpenCrown PC; see [`android-port/README.md`](android-port/README.md).
 
 The lobby server builds and tests separately with Node.js; see [`server/lobby-worker/README.md`](server/lobby-worker/README.md).
 
@@ -279,10 +319,9 @@ The lobby server builds and tests separately with Node.js; see [`server/lobby-wo
 | `port/tools` | The launcher, `dcp_run` and developer tools |
 | `port/tests` | Unit tests (synthetic data only, no game files) |
 | `linux-port` | The Linux / Steam Deck build (its own copy of the above, adapted for Linux) and its AppImage packaging |
-| `android-port` | OpenCrown Mobile for Android (in development): the PS Vita version under an ARM JIT, Vulkan renderer, Android launcher |
+| `android-port` | OpenCrown Mobile for Android (beta): the PS Vita version under an ARM JIT, Vulkan renderer, Android launcher |
 | `server/lobby-worker` | The lobby server (Cloudflare Worker, TypeScript) |
 | `notes/map` | Reverse-engineering notes on how the game's systems work |
-| `Work/tools`, `Work/ghidra_scripts` | Analysis scripts used while researching the game |
 
 ## FAQ
 

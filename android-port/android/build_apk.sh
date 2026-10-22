@@ -54,8 +54,16 @@ rm -f "$OUT/res.zip"
 "$BT/aapt2.exe" link -o "$OUT/base.apk" --manifest "$HERE/AndroidManifest.xml" -I "$JAR" $DEBUG_FLAG \
   --min-sdk-version 28 --target-sdk-version 35 "$OUT/res.zip"
 LIBSDL="$(find "$OUT/native/sdl3" -name libSDL3.so | head -1)"
-python -I "$HERE/pack_apk.py" "$OUT/base.apk" "$OUT/unaligned.apk" "$OUT/dex/classes.dex" \
-  "$OUT/native/libmain.so" "$LIBSDL"
+LIBMAIN="$OUT/native/libmain.so"
+# Release: debug info out (~60 MB, and it holds this PC's source paths); the symbol table stays for simpleperf.
+if [ "${DCP_RELEASE:-}" = 1 ]; then
+  STRIP="$NDK/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe"
+  mkdir -p "$OUT/stripped"
+  "$STRIP" --strip-debug -o "$OUT/stripped/libmain.so" "$LIBMAIN"
+  "$STRIP" --strip-debug -o "$OUT/stripped/libSDL3.so" "$LIBSDL"
+  LIBMAIN="$OUT/stripped/libmain.so" LIBSDL="$OUT/stripped/libSDL3.so"
+fi
+python -I "$HERE/pack_apk.py" "$OUT/base.apk" "$OUT/unaligned.apk" "$OUT/dex/classes.dex" "$LIBMAIN" "$LIBSDL"
 "$BT/zipalign.exe" -f -P 16 4 "$OUT/unaligned.apk" "$OUT/aligned.apk"
 if [ ! -f "$KEYSTORE" ]; then
   "$JBIN/keytool" -genkeypair -keystore "$KEYSTORE" -storepass android -keypass android -alias debug \

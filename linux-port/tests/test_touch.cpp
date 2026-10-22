@@ -1,4 +1,5 @@
-// Touch screen / Steam Deck input logic (tools/dcp_run/touch_math.h) against a model of the game's relative cursor.
+// Touch screen / Steam Deck input logic (tools/dcp_run/touch_math.h) against a model of the game's relative cursor,
+// and the touch-as-mouse rule (Steam Deck Game Mode).
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
@@ -130,6 +131,16 @@ int main() {
             if (o.finger && fx0 < 0) fx0 = o.x;
         }
         CHECK(fx0 == 960 && !t.active());
+    }
+    // input.ini auto/on/off values and the touch-as-mouse rule.
+    {
+        CHECK(parse_tri("auto") == Tri::Auto && parse_tri("On") == Tri::On && parse_tri("OFF") == Tri::Off &&
+              parse_tri("0") == Tri::Off && parse_tri("junk") == Tri::Auto);
+        CHECK(mouse_is_touch(Tri::Auto, true, false, false));    // Game Mode, no native touch yet
+        CHECK(!mouse_is_touch(Tri::Auto, true, true, false));    // native touches arrive: clicks are clicks again
+        CHECK(!mouse_is_touch(Tri::Auto, false, false, false));  // desktop
+        CHECK(!mouse_is_touch(Tri::On, true, false, true));      // mouse captured for the fairy
+        CHECK(mouse_is_touch(Tri::On, false, true, false) && !mouse_is_touch(Tri::Off, true, false, false));
     }
     std::printf(g_fail ? "test_touch: %d FAILED\n" : "test_touch: all passed\n", g_fail);
     return g_fail ? 1 : 0;

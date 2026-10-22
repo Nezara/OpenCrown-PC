@@ -8,7 +8,7 @@
 // list. Save Folder page: DCP_SAVE_ROOT. The story / tutorial skip questions are always on (DCP_STORY_SKIP /
 // DCP_TUTORIAL_SKIP=0 in the environment turn them off, hle/skip_offers.h).
 // First start without a chosen save folder asks for one (default or custom). Report a Bug page: a short note (256
-// characters) plus the redacted tail of logs/last_run.log (net/bug_report.h: IPs, ids, user and PC names removed;
+// characters) plus the OS line and the redacted tail of logs/last_run.log (net/bug_report.h: IPs, ids, user and PC names removed;
 // "Preview" shows exactly what is sent), through the lobby, which rate-limits it.
 // Player name: never the Windows user name - an empty name gets a random "PlayerNNNN" on first start.
 // Update (bottom of the sidebar, update.h): checks GitHub releases at start (setting) and on demand on a worker thread,
@@ -621,7 +621,7 @@ struct BugJob {
         running = true, result = {};
         std::string url = trim(s.lobby), name = trim(s.name);
         th = std::thread([this, url, name, id, text, log_path] {
-            std::string log = dcp::net::redact_log(dcp::net::log_tail_text(log_path, dcp::net::kBugReportLogMax), id);
+            std::string log = dcp::net::report_log(log_path, id);
             dcp::net::BugReportResult r = dcp::net::send_bug_report(url, name, id, text, log, "launcher " __DATE__);
             std::lock_guard<std::mutex> lk(mu);
             result = r, running = false, sent_new = r.ok;
@@ -1359,7 +1359,7 @@ int main(int argc, char** argv) {
                 if (ImGui::Button("Preview##bug")) {  // exactly what Send uploads
                     bug_preview = "Note:\n" + trim(bug_text) + "\n\nLog (" + native(log_path) + ", last " +
                                   std::to_string(dcp::net::kBugReportLogMax / 1024) + " KB, redacted):\n" +
-                                  dcp::net::redact_log(dcp::net::log_tail_text(log_path, dcp::net::kBugReportLogMax), ident);
+                                  dcp::net::report_log(log_path, ident);
                     ImGui::OpenPopup("Report preview");
                 }
                 if (!sending && !res.msg.empty()) {
@@ -1368,7 +1368,8 @@ int main(int argc, char** argv) {
                 }
                 if (res.left >= 0) ImGui::TextColored(kDim, "Reports left today: %d", res.left);
                 ImGui::Spacing();
-                ImGui::TextColored(kDim, "Sent: your note, player name and online id, and the last %d KB of the game log%s.\n"
+                ImGui::TextColored(kDim, "Sent: your note, player name and online id, your Windows version and the\n"
+                                         "last %d KB of the game log%s.\n"
                                          "IP addresses, other players' ids, your Windows user and PC name are removed\n"
                                          "first; Preview shows exactly what is sent. Up to 5 reports a day.",
                                    int(dcp::net::kBugReportLogMax / 1024), have_log ? "" : " (no log yet: play once first)");

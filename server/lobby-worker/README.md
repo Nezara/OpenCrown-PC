@@ -57,7 +57,6 @@ Game-side tests against it (from the repo root, Git Bash, port built):
 ```
 DCP_LOBBY_TEST_URL=ws://127.0.0.1:8787/ port/build/test_lobby.exe
 DCP_LOBBY_TLS_INSECURE=1 DCP_LOBBY_TEST_URL=wss://127.0.0.1:8788/ port/build/test_lobby.exe
-DCP_LOBBY=ws://127.0.0.1:8787/ port/tools/dcp_lobby/two_instances.sh <out_dir> Work/stage5/in_town_to_portal.txt
 ```
 
 `test_lobby` expects an otherwise idle lobby. `DCP_LOBBY_TLS_INSECURE=1` skips certificate checks and is honoured only
@@ -83,7 +82,8 @@ Set it to `"0"` for the old behaviour: a dropped socket leaves its room at once.
 
 ## Bug reports
 
-The launcher's Report a Bug tab sends a short note plus the tail of the last game log through the lobby
+The launcher's Report a Bug tab sends a short note plus the tail of the last game log (its first line is
+`OS: <name, version, architecture>`, net/bug_report.h `report_log`) through the lobby
 (`bug_report`, lobby_protocol.md 4.4; verified accounts, 5 a day per account, 10 per IP, 300 in total; the newest 1000
 are kept). Reading them needs a token, set once (any long random string):
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(DragonsCrownPort C CXX)
-set(OPENCROWN_VERSION "1.0.3")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
+set(OPENCROWN_VERSION "1.0.4")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
 # Test builds only (updater end-to-end test): -DOPENCROWN_VERSION_OVERRIDE=9.9.9. Never for a release.
 set(OPENCROWN_VERSION_OVERRIDE "" CACHE STRING "Override OPENCROWN_VERSION (updater tests only)")
 if(OPENCROWN_VERSION_OVERRIDE)

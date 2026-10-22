@@ -43,6 +43,29 @@ inline bool steam_mouse_mode(bool deck_trackpads, bool has_steam_virtual_pad, bo
     return deck_trackpads && has_steam_virtual_pad && !kbm_active;
 }
 
+// "auto" | "on" | "off" settings in input.ini (touch_as_mouse, mouse_attacks); anything else = auto.
+enum class Tri { Auto, On, Off };
+inline Tri parse_tri(const char* v) {
+    auto eq = [&](const char* s) {
+        const char* p = v;
+        for (; *p && *s; ++p, ++s)
+            if ((*p | 0x20) != *s) return false;
+        return !*p && !*s;
+    };
+    if (eq("on") || eq("1") || eq("true")) return Tri::On;
+    if (eq("off") || eq("0") || eq("false")) return Tri::Off;
+    return Tri::Auto;
+}
+
+// touch_as_mouse: gamescope (Steam Deck Game Mode) turns touches into left-mouse clicks for programs that do not ask
+// for native touch, so a left press / drag / release stands for a finger on the fairy path. auto = only under
+// gamescope and only until a real touch event has been seen (then the screen delivers touches itself). Never while
+// the mouse is captured for the fairy (relative mode: no absolute position; the Steam Input trackpad mouse lives there).
+inline bool mouse_is_touch(Tri setting, bool gamescope, bool native_touch_seen, bool relative_mode) {
+    if (relative_mode || setting == Tri::Off) return false;
+    return setting == Tri::On || (gamescope && !native_touch_seen);
+}
+
 // Closed loop: virtual finger that moves the game's cursor to (tx, ty). One step per new cursor reading. The step
 // sent last is not in the reading yet (the hook samples the position before the game applies that read's delta), so
 // it counts as "in flight" when the error is taken. The game's gain k (in-game touch sensitivity) is estimated from

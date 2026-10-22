@@ -493,7 +493,7 @@ public class LauncherActivity extends Activity {
     }
 
     // --- saves -----------------------------------------------------------------------------------------------------
-    static final int IMPORT_SAVE = 10;
+    static final int IMPORT_SAVE = 10, EXPORT_SAVE = 11;
     String saveMessage;
 
     File saveDir() { return new File(root, "saves"); }
@@ -518,19 +518,55 @@ public class LauncherActivity extends Activity {
                 startActivityForResult(i, IMPORT_SAVE);
             }
         });
+        para("");
+        para("Export your save to take it to OpenCrown on PC: pick where it goes (Downloads, a USB stick, Google Drive "
+                + "...), then put it in Documents\\Dragons Crown Pro\\saves\\SAVEDATA00\\ on the PC. "
+                + "No conversion needed.");
+        Button export = button("Export save...", new View.OnClickListener() {
+            public void onClick(View v) {
+                Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);  // the system "save to" picker
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("application/octet-stream");
+                i.putExtra(Intent.EXTRA_TITLE, "SAVE0.DAT");
+                startActivityForResult(i, EXPORT_SAVE);
+            }
+        });
+        export.setEnabled(s != null && s.problem == null);
         if (saveMessage != null) {
             TextView t = para(saveMessage);
-            t.setTextColor(saveMessage.startsWith("Imported") ? OK : BAD);
+            t.setTextColor(saveMessage.startsWith("Imported") || saveMessage.startsWith("Exported") ? OK : BAD);
         }
     }
 
     @Override
     protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
-        if (code != IMPORT_SAVE || result != RESULT_OK || data == null || data.getData() == null) return;
-        saveMessage = importSave(data.getData());
+        if ((code != IMPORT_SAVE && code != EXPORT_SAVE) || result != RESULT_OK || data == null || data.getData() == null)
+            return;
+        saveMessage = code == IMPORT_SAVE ? importSave(data.getData()) : exportSave(data.getData());
         page = 1;
         refresh();
+    }
+
+    // Copies saves/SAVE0.DAT as it is to the place picked in the system dialog (same format as PC / PS4 / PS5).
+    String exportSave(Uri uri) {
+        File cur = new File(saveDir(), "SAVE0.DAT");
+        byte[] b;
+        try (java.io.FileInputStream in = new java.io.FileInputStream(cur)) {
+            b = SaveFile.readAll(in, SaveFile.SIZE + 1);
+        } catch (IOException e) {
+            return "Could not read your save: " + e.getMessage();
+        }
+        SaveFile s = SaveFile.parse(b);
+        if (s.problem != null) return "Your save could not be exported: " + s.problem + ".";
+        try (java.io.OutputStream o = getContentResolver().openOutputStream(uri, "wt")) {
+            if (o == null) return "Export failed: that place cannot be written.";
+            o.write(b);
+        } catch (IOException | SecurityException e) {
+            return "Export failed: " + e.getMessage();
+        }
+        return "Exported SAVE0.DAT. On the PC, put it in Documents\\Dragons Crown Pro\\saves\\SAVEDATA00\\ "
+                + "(keep a copy of the PC's own save first).";
     }
 
     String importSave(Uri uri) {
@@ -1225,7 +1261,7 @@ public class LauncherActivity extends Activity {
         });
         if (bugLeft >= 0) para("Reports left today: " + bugLeft).setTextColor(DIM);
         boolean haveLog = logFile().isFile();
-        para("Sent: your note, player name and online id, and the last 128 KB of the game log"
+        para("Sent: your note, player name and online id, your Android version, and the last 128 KB of the game log"
                 + (haveLog ? "" : " (no log yet: play once first)") + ". IP addresses, other players' ids and your "
                 + "device's user name are removed first; Preview shows exactly what is sent. Up to 5 reports a day.")
                 .setTextColor(DIM);

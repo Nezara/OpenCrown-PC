@@ -81,12 +81,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_org_opencrown_mobile_Net_friends(JNIEn
   return env->NewStringUTF(out.c_str());
 }
 
-// What a bug report would carry of the last game log (log.txt, redacted, last kBugReportLogMax bytes); "" if none.
+// What a bug report carries as its log: the OS line, then the redacted tail of log.txt (bug_report.h report_log).
 extern "C" JNIEXPORT jstring JNICALL Java_org_opencrown_mobile_Net_bugLog(JNIEnv* env, jclass, jstring root,
                                                                          jstring log_path) {
   const dcp::net::Identity id = identity(env, root);
-  const std::string tail = dcp::net::log_tail_text(jstr(env, log_path), dcp::net::kBugReportLogMax);
-  return env->NewStringUTF(tail.empty() ? "" : dcp::net::redact_log(tail, id).c_str());
+  return env->NewStringUTF(dcp::net::report_log(jstr(env, log_path), id).c_str());
 }
 
 // Lines: result <ok> <msg> <left>.
@@ -99,10 +98,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_org_opencrown_mobile_Net_bugReport(JNI
     line(out, {"result", "0", "No online identity: " + id.error, "-1"});
     return env->NewStringUTF(out.c_str());
   }
-  const std::string tail = dcp::net::log_tail_text(jstr(env, log_path), dcp::net::kBugReportLogMax);
-  const dcp::net::BugReportResult r = dcp::net::send_bug_report(
-      jstr(env, lobby), jstr(env, name), id, jstr(env, note), tail.empty() ? "" : dcp::net::redact_log(tail, id),
-      jstr(env, version));
+  const dcp::net::BugReportResult r = dcp::net::send_bug_report(jstr(env, lobby), jstr(env, name), id, jstr(env, note),
+                                                                dcp::net::report_log(jstr(env, log_path), id),
+                                                                jstr(env, version));
   line(out, {"result", r.ok ? "1" : "0", r.msg, std::to_string(r.left)});
   return env->NewStringUTF(out.c_str());
 }

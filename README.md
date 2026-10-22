@@ -157,8 +157,6 @@ On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating
 4. **Copy your dump to the device.** Connect it to your PC with a USB cable and choose *File transfer* on the device, then on the PC open the device's `Internal storage/OpenCrown/dump/`:
    - copy the **contents** of the base game folder into `dump/Game/`, and
    - copy the **contents** of the 1.09 update folder into `dump/Update/`.
-
-   A VitaShell-style layout works too: copy the `app/PCSE00019` and `patch/PCSE00019` folders into `dump/` as they are.
 5. Back in the launcher, press **Check again** on the **Game** page. Both lines should start with **[ok]** (base game 01.00 and update 1.09 found); if not, the line says what's missing.
 6. Press **Play**. 🎉
 

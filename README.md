@@ -89,12 +89,19 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 
 ## Your dump
 
-OpenCrown needs the game's files from **a PS4 or PS5 you own**: the **decrypted** `eboot.bin` together with the rest of the game folder (the files the game reads at run time and the `sce_sys` folder).
+OpenCrown needs the game's files from a console you own. Which console depends on the version you play:
+
+**PC (Windows) and Linux / Steam Deck:** **Dragon's Crown Pro (CUSA10454)** from **a PS4 or PS5 you own**: the **decrypted** `eboot.bin` together with the rest of the game folder (the files the game reads at run time and the `sce_sys` folder).
+
+**OpenCrown Mobile (Android):** **Dragon's Crown (PCSE00019)** from **a PS Vita you own**, as two folders:
+
+- **The base game:** the **decrypted** `eboot.bin` together with the rest of the game folder (the `sce_module` and `sce_sys` folders and the files the game reads at run time).
+- **The 1.09 update:** laid out the same way, with its own **decrypted** `eboot.bin`. Other update versions aren't supported.
+
+The launcher checks both folders and tells you if anything is missing.
 
 > [!WARNING]
-> **PKG files won't work.** A PKG from the PS4/PS5 or the PlayStation Store is encrypted. OpenCrown can't decrypt it, and it never will. It also won't help you get the game any other way. Dump the copy you own with the usual homebrew tools for your console.
-
-For **OpenCrown Mobile** on Android you need a **PS Vita** dump instead (base game + 1.09 update, decrypted): see [Android](#android-beta).
+> **Encrypted packages won't work.** A PKG from the PS4/PS5, the PS Vita or the PlayStation Store is encrypted. OpenCrown can't decrypt it, and it never will. It also won't help you get the game any other way. Dump the copy you own with the usual homebrew tools for your console.
 
 Your dump is only ever **read**. OpenCrown never writes to it or modifies it; the small patches described below (34 bytes in total) are applied in memory each time you play.
 
@@ -144,10 +151,7 @@ On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating
 **What you need**
 
 - An **Android 9 or newer** phone, tablet or handheld with a **64-bit ARM CPU** and **Vulkan 1.1**. A controller is recommended; on-screen controls appear while none is connected.
-- Your own **decrypted** dump of **Dragon's Crown for PS Vita (US, PCSE00019)**: **both** the base game **and** the **1.09 update**. Each one is a folder:
-
-> [!WARNING]
-> **The dump must be decrypted.** A copy straight from a game card, a `.vpk`, a PKG or a folder that still has an `sce_pfs/` folder inside is encrypted, and OpenCrown can't decrypt it and never will. Update your Vita to **1.09** (older updates are refused), then dump the game and the update. Other regions aren't supported yet.
+- Your own **decrypted** PS Vita dump: the base game **and** the **1.09 update**. See [Your dump](#your-dump).
 
 **Install**
 

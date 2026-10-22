@@ -139,7 +139,7 @@ On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating
 
 ### Android (beta)
 
-**OpenCrown Mobile** runs the game's **PS Vita** version on Android. It's lighter to run (960×544, a quarter of the pixels of 1080p) and cheaper to translate on phone CPUs (32-bit ARM to 64-bit ARM instead of x86-64). The game already supports touch, and a Vita is far easier to dump than a PS4. It plays online together with OpenCrown PC, and saves move between the two with no conversion.
+**OpenCrown Mobile** runs the game's **PS Vita** version on Android. It's lighter to run (960×544, a quarter of the pixels of 1080p), cheaper to translate on phone CPUs (32-bit ARM to 64-bit ARM instead of x86-64) and the game already supports touch. It plays online together with OpenCrown PC, and saves move between the two with no conversion.
 
 **What you need**
 

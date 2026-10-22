@@ -147,7 +147,7 @@ On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating
 - Your own **decrypted** dump of **Dragon's Crown for PS Vita (US, PCSE00019)**: **both** the base game **and** the **1.09 update**. Each one is a folder:
 
 > [!WARNING]
-> **The dump must be decrypted.** A copy straight from a game card, a `.vpk`, a PKG or a folder that still has an `sce_pfs/` folder inside is encrypted, and OpenCrown can't decrypt it and never will. Update your Vita to **1.09** (older updates are refused), then dump the game and the update you own with the usual Vita homebrew tools. Other regions aren't supported yet.
+> **The dump must be decrypted.** A copy straight from a game card, a `.vpk`, a PKG or a folder that still has an `sce_pfs/` folder inside is encrypted, and OpenCrown can't decrypt it and never will. Update your Vita to **1.09** (older updates are refused), then dump the game and the update. Other regions aren't supported yet.
 
 **Install**
 

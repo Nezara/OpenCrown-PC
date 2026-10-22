@@ -8,6 +8,7 @@
 !/notes/
 !/port/
 !/linux-port/
+!/android-port/
 !/server/
 !/Work/
 /Work/*
@@ -18,6 +19,9 @@
 /port/build*/
 /linux-port/build*/
 /linux-port/dist/
+/android-port/build*/
+/android-port/vita_data/
+/android-port/mobile_data/
 /Work/tools/paths.local.ps1
 *.log
 .env

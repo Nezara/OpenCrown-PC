@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive launcher icon (Android 8+): the launcher masks it to its own shape. Background = the dragon art, foreground =
+     the "OpenCrown" lettering inside the 66 dp safe zone. mipmap-*/ic_launcher.png stays as the plain fallback. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

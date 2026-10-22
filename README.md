@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/Nezara/OpenCrown-PC/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Nezara/OpenCrown-PC?label=release&color=c08a2a"></a>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Steam%20Deck-3a5a8a">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Steam%20Deck%20%7C%20Android%20%28beta%29-3a5a8a">
   <img alt="Requires your own copy" src="https://img.shields.io/badge/requires-your%20own%20PS4%2FPS5%20dump-8a3a4a">
   <img alt="Online" src="https://img.shields.io/badge/online-peer--to--peer-3a8a5a">
   <a href="https://discord.gg/srBT23NYRA"><img alt="Discord" src="https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white"></a>
@@ -17,6 +17,7 @@
 <p align="center">
   <b><a href="#getting-started">Getting started</a></b> ·
   <a href="#linux--steam-deck">Linux / Steam Deck</a> ·
+  <a href="#android-beta">Android</a> ·
   <a href="#the-launcher">Launcher</a> ·
   <a href="#controls">Controls</a> ·
   <a href="#playing-online">Online</a> ·

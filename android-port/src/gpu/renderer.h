@@ -65,8 +65,10 @@ struct Scene {
   DepthStencilSurface depth;
 };
 
+// SceGxmStencilFunc values (bits 25..27).
+constexpr uint32_t kStencilNever = 0x00000000, kStencilAlways = 0x0E000000;
 struct StencilState {
-  uint32_t func = 0, fail = 0, depth_fail = 0, depth_pass = 0;
+  uint32_t func = kStencilAlways, fail = 0, depth_fail = 0, depth_pass = 0;  // ops 0 = KEEP
   uint8_t compare_mask = 0xff, write_mask = 0xff;
   uint32_t ref = 0;
 };

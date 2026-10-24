@@ -608,6 +608,10 @@ void collect_locked(std::vector<Call>& calls) {
       if (id != g_me && port) rudp::punch(ip, port);  // open our NAT towards it now (hole punching)
       HLE_NOTE("MATCHING2 signal: member 0x%x at %s:%lld\n", id, b.get("ip").as_string().c_str(),
                (long long)b.get("port").as_int());
+      for (const auto& [oid, o] : g_signals)  // two devices behind one router claiming one port: only one is reachable
+        if (oid != id && oid != g_me && id != g_me && port && o.ip_be == ip && o.port_be == port)
+          HLE_NOTE("MATCHING2 members 0x%x and 0x%x share one public endpoint %s:%lld\n", oid, id,
+                   b.get("ip").as_string().c_str(), (long long)b.get("port").as_int());
     } else if (m.ev == "signal_dead") {
       uint16_t id = uint16_t(b.get("member_id").as_int());
       auto it = g_signals.find(id);

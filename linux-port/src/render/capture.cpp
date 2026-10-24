@@ -175,25 +175,41 @@ OBS_CLS(obs_layer_replay, Cls::Layer)
 
 // ---- fairy cursor readback (touch screen closed loop: tools/dcp_run/touch_math.h, notes/map/fairy_cursor.md) ----
 // Cursor_Update (FUN_0039ad80, rdi = cursor) entry: it returns at once when cursor+0x1e0 (its actor) is null, else
-// its first call is vfunc +0x1c8 (player type id, 11..14 = players 0..3), which we make the same way. +0xabc/+0xac0
+// its first call is vfunc +0x1c8 (player type id, 11..14 = player slots 0..3), which we make the same way. +0xabc/+0xac0
 // = position (f32, centred 1920x1080 px, y down) after the previous frame's update.
+// The cursor we read is the one fed by pad 0's touch record (our virtual finger): Cursor_Update takes the record
+// from the slot's pad id, players = [vfunc +0xd8 (owner) + 0x80], slot + idx * 0x23b0, pad id u32 at +0x2284
+// (39b0cc..39b0f8 -> FUN_00045850; 0xff from the constructor 276f0, set by FUN_00026820 at 2686c). Online the local
+// player can be in any slot (bug report 21: slot 3 as a guest), so the slot index alone picks someone else's cursor.
 std::atomic<uint64_t> g_cursor_xy{0};
 std::atomic<uint32_t> g_cursor_seq{0};
 const bool g_cursor_log = std::getenv("DCP_CURSOR_LOG") != nullptr;
 OBS(obs_cursor_update) {
     UNUSED_ARGS;
     if (!a0 || !*reinterpret_cast<const uint64_t*>(a0 + 0x1e0)) return;
-    typedef int64_t (*TypeFn)(uint64_t);  // SysV is the native ABI here
+    typedef int64_t (*VFn)(uint64_t);  // SysV is the native ABI here
     uint64_t vt = *reinterpret_cast<const uint64_t*>(a0);
-    if (int16_t(reinterpret_cast<TypeFn>(*reinterpret_cast<const uint64_t*>(vt + 0x1c8))(a0)) != 11) return;
+    int idx = int16_t(reinterpret_cast<VFn>(*reinterpret_cast<const uint64_t*>(vt + 0x1c8))(a0)) - 11;
+    if (idx < 0 || idx > 3) return;
+    uint64_t owner = uint64_t(reinterpret_cast<VFn>(*reinterpret_cast<const uint64_t*>(vt + 0xd8))(a0));
+    uint64_t players = owner ? *reinterpret_cast<const uint64_t*>(owner + 0x80) : 0;
+    if (!players) return;
+    uint32_t pad = *reinterpret_cast<const uint32_t*>(players + uint64_t(idx) * 0x23b0 + 0x2284);
     float x, y;
     std::memcpy(&x, reinterpret_cast<const void*>(a0 + 0xabc), 4);
     std::memcpy(&y, reinterpret_cast<const void*>(a0 + 0xac0), 4);
+    if (pad != 0) {
+        static uint32_t seen;  // DCP_CURSOR_LOG: other slots' cursors, once per slot / pad id
+        if (g_cursor_log && !(seen & (1u << idx)))
+            seen |= 1u << idx, std::fprintf(stderr, "cursor: slot %d pad %#x (not ours)\n", idx, pad);
+        return;
+    }
     uint32_t xb, yb;
     std::memcpy(&xb, &x, 4), std::memcpy(&yb, &y, 4);
     g_cursor_xy.store(uint64_t(yb) << 32 | xb, std::memory_order_relaxed);
     uint32_t n = g_cursor_seq.fetch_add(1, std::memory_order_release) + 1;
-    if (g_cursor_log && n % 30 == 1) std::fprintf(stderr, "cursor: #%u %.1f %.1f (obj %llx)\n", n, x, y, (unsigned long long)a0);
+    if (g_cursor_log && n % 30 == 1)
+        std::fprintf(stderr, "cursor: #%u slot %d %.1f %.1f (obj %llx)\n", n, idx, x, y, (unsigned long long)a0);
 }
 // Optional: on a different build the site check fails, we log once and the touch screen runs open loop.
 constexpr uint32_t kCursorUpdate = 0x39ad80;

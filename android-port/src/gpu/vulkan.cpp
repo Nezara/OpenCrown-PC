@@ -1846,6 +1846,11 @@ void VulkanRenderer::draw(guest::Memory& mem, const Draw& d) {
                                            (unsigned long long)frames_.load());
     return;
   }
+  // Stencil func NEVER: the draw writes stencil only (its fragments all fail, colour is never written). The game's
+  // only such draws are its stencil scissor quads (1.09 f813bc350: NEVER/REPLACE full-screen + window rectangle,
+  // then EQUAL for what follows; notes/map/vita_dark_stages_109.md). Without stencil emulation they painted the
+  // clear program's black over the whole target: the black layers in the Ghost Ship Cove caves / lava stages.
+  if (d.state.front_stencil.func == kStencilNever) return;
   uint64_t t = ticks();
   VkPrimitiveTopology topo;
   switch (d.primitive) {

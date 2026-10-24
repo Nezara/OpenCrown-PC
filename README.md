@@ -179,7 +179,7 @@ The launcher is a small window with a sidebar. Once your dump is set, it uses th
 |---|---|
 | **Game** | Choose and check your dump folder, then press **Play**. The game starts in its own window; the launcher writes everything it prints to `logs\last_run.log`. |
 | **Controls** | Rebind every keyboard and mouse action and adjust the fairy pointer speed. Saved to `input.ini`, which you can also edit by hand. Delete it to restore the defaults. |
-| **Display** | Windowed or borderless fullscreen, window size, and **4K rendering** (PS4 Pro mode). |
+| **Display** | Windowed or borderless fullscreen, window size, **4K rendering** (PS4 Pro mode), and the game **language** (English, French, Spanish, German, Italian, from the game's own files). |
 | **Online** | Your online name, your **friend code**, adding friends by code, incoming and outgoing friend requests, UPnP, a connection test and the lobby server address. |
 | **Save Folder** | Where your saves live. Point it at a folder with a `SAVEDATA00` from your PS4/PS5 to keep playing your console progress. |
 | **Report a Bug** | Sends a short note, your OS name and version, and the end of your last log, so problems can be fixed. You can **preview** exactly what is sent first. See [Privacy](#privacy). |

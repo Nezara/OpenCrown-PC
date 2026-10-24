@@ -38,6 +38,7 @@
 #include <shellapi.h>
 #include <wincodec.h>
 
+#include "../common/dump_check.h"
 #include "../common/game_version.h"
 #include "../common/input_defaults.h"
 #include "imgui.h"
@@ -102,11 +103,13 @@ struct Settings {
     bool fullscreen = false;
     bool uhd = false;  // 4K rendering (PS4 Pro mode, dcp_run --4k)
     int width = 1280, height = 720;
+    std::string language = "en";  // game language, passed as DCP_LANGUAGE (hle/services.cpp system_language)
     // Online (passed as DCP_LOBBY / DCP_NP_NAME / DCP_UPNP; the game's own online menu uses them)
     static constexpr const char* kDefaultLobby = "wss://opencrown-lobby.networkhandler.workers.dev/";
     std::string lobby = kDefaultLobby;
     std::string name;   // online name shown to others: 3..16 of [A-Za-z0-9_-] (net/identity.h online_name)
     bool upnp = true;
+    bool net_trace = false;  // DCP_NET_TRACE=1: online session trace in last_run.log (hle/net_trace.h), diagnostics
     bool check_updates = true;  // ask GitHub for a newer launcher at start
 };
 
@@ -125,9 +128,11 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "uhd") s.uhd = v == "1" || v == "true";
         else if (k == "width") s.width = std::clamp(std::atoi(v.c_str()), 320, 16384);
         else if (k == "height") s.height = std::clamp(std::atoi(v.c_str()), 180, 16384);
+        else if (k == "language") s.language = v;
         else if (k == "lobby") s.lobby = v.empty() ? Settings::kDefaultLobby : v;
         else if (k == "name") s.name = v.substr(0, 16);
         else if (k == "upnp") s.upnp = v == "1" || v == "true";
+        else if (k == "net_trace") s.net_trace = v == "1" || v == "true";
         else if (k == "check_updates") s.check_updates = v == "1" || v == "true";
     }
 }
@@ -137,8 +142,9 @@ void save_settings(const std::string& path, const Settings& s) {
     o << "# OpenCrownPC Launcher settings\n"
       << "dump = " << s.dump << "\nsaves = " << s.saves
       << "\nsaves_chosen = " << (s.saves_chosen ? "true" : "false") << "\nuhd = " << (s.uhd ? "true" : "false") << "\nfullscreen = " << (s.fullscreen ? "true" : "false") << "\nwidth = " << s.width
-      << "\nheight = " << s.height << "\nlobby = " << s.lobby << "\nname = " << s.name
-      << "\nupnp = " << (s.upnp ? "true" : "false") << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
+      << "\nheight = " << s.height << "\nlanguage = " << s.language << "\nlobby = " << s.lobby << "\nname = " << s.name
+      << "\nupnp = " << (s.upnp ? "true" : "false") << "\nnet_trace = " << (s.net_trace ? "true" : "false")
+      << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
       << "\n";
 }
 
@@ -276,17 +282,44 @@ std::vector<Check> validate_dump(const std::string& dir) {
     std::vector<Check> out;
     if (dir.empty()) return {{false, true, "No dump folder selected."}};
     if (!exists(dir)) return {{false, true, "Folder does not exist."}};
+    auto path = [&](const std::string& rel) { return std::filesystem::path(widen(dir + "/" + rel)); };
     bool eb = exists(dir + "/eboot.bin");
-    out.push_back({eb, true, eb ? "eboot.bin found" : "eboot.bin missing (the decrypted game executable)"});
-    if (eb) out.push_back(version_check(std::filesystem::path(widen(dir + "/eboot.bin"))));
-    for (const char* cpk : {"DRACRO.CPK", "DRACRO_US.CPK"}) {
-        bool ok = exists(dir + "/" + cpk);
-        out.push_back({ok, true, std::string(cpk) + (ok ? " found" : " missing (game data)")});
+    if (!eb) {
+        out.push_back({false, true, "eboot.bin missing (the decrypted game executable)"});
+    } else if (dcp::FileState s = dcp::exe_state(path("eboot.bin")); s != dcp::FileState::Ok) {
+        out.push_back({false, true, dcp::exe_problem("eboot.bin", s),
+                       s == dcp::FileState::Encrypted ? "[encrypted]" : "[bad file]"});
+    } else {
+        out.push_back({true, true, "eboot.bin found (decrypted)"});
+        out.push_back(version_check(path("eboot.bin")));  // only meaningful on a decrypted eboot
     }
+    for (const dcp::DumpCpk& cpk : dcp::kDumpCpks) {
+        if (!exists(dir + "/" + cpk.name)) {
+            out.push_back({false, true, std::string(cpk.name) + " missing (game data)"});
+            continue;
+        }
+        std::error_code ec;
+        uintmax_t have = std::filesystem::file_size(path(cpk.name), ec);
+        dcp::FileState s = dcp::cpk_state(path(cpk.name), cpk.size);
+        if (s == dcp::FileState::Ok) out.push_back({true, true, std::string(cpk.name) + " found"});
+        else out.push_back({false, true, dcp::cpk_problem(cpk.name, s, have, cpk.size),
+                            s == dcp::FileState::Truncated ? "[incomplete]" : "[bad file]"});
+    }
+    // Optional, but the game loads it whenever it is there, so an encrypted copy stops the game.
     bool libc = exists(dir + "/sce_module/libc.prx");
-    out.push_back({libc, false, libc ? "sce_module/libc.prx found"
-                                     : "sce_module/libc.prx missing (optional; built-in libc stubs are used)"});
+    dcp::FileState ls = libc ? dcp::exe_state(path("sce_module/libc.prx")) : dcp::FileState::Ok;
+    if (!libc) out.push_back({false, false, "sce_module/libc.prx missing (optional; built-in libc stubs are used)"});
+    else if (ls == dcp::FileState::Ok) out.push_back({true, false, "sce_module/libc.prx found"});
+    else out.push_back({false, true, dcp::exe_problem("sce_module/libc.prx", ls) + " (or delete it)",
+                        ls == dcp::FileState::Encrypted ? "[encrypted]" : "[bad file]"});
     return out;
+}
+
+// What stops Play, for the Play bar: the first failing required check.
+std::string dump_problem(const std::vector<Check>& v) {
+    for (const Check& c : v)
+        if (c.required && !c.ok) return c.text;
+    return "";
 }
 
 bool dump_ok(const std::vector<Check>& v) {
@@ -362,6 +395,7 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
     std::wstring wcmd = widen(cmd), wdir = widen(exe_dir());
     // Custom save folder: the game's DCP_SAVE_ROOT override, set in our environment (inherited by the child).
     set_env(L"DCP_SAVE_ROOT", s.saves.empty() ? "" : native(s.saves));
+    set_env(L"DCP_LANGUAGE", s.language);
     // Same user dir as ours, whatever the save folder is: the game reads input.ini and identity.ini from it (without
     // this it used the save folder's parent, so a custom save folder meant another online account than ours).
     // dcp::user_dir() rule, built from the wide USERPROFILE so non-ASCII profile paths survive.
@@ -375,6 +409,7 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
     set_env(L"DCP_LOBBY", trim(s.lobby));
     set_env(L"DCP_NP_NAME", s.name);
     set_env(L"DCP_UPNP", s.upnp ? "" : "0");
+    if (s.net_trace) set_env(L"DCP_NET_TRACE", "1");  // off leaves an inherited DCP_NET_TRACE alone
     BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
                              CREATE_NO_WINDOW | (have_list ? EXTENDED_STARTUPINFO_PRESENT : 0), nullptr, wdir.c_str(),
                              &si.StartupInfo, &pi);
@@ -1153,7 +1188,7 @@ int main(int argc, char** argv) {
                 for (const Check& c : checks) {
                     ImGui::TextColored(c.ok ? kGood : c.required ? kBad : kWarn, "%s", c.ok ? "[ok]" : c.required ? c.fail : "[optional]");
                     ImGui::SameLine();
-                    ImGui::TextUnformatted(c.text.c_str());
+                    ImGui::TextWrapped("%s", c.text.c_str());
                 }
                 ImGui::Spacing();
                 if (!dump_ok(checks)) ImGui::TextColored(kBad, "The dump folder is incomplete or not supported; the game cannot start.");
@@ -1250,6 +1285,20 @@ int main(int argc, char** argv) {
                 ImGui::Spacing();
                 ImGui::TextColored(kDim, "Fullscreen uses the desktop resolution; the window size applies when windowed.\n"
                                          "In game, F1 shows frame statistics in the title bar.");
+                ImGui::Spacing();
+                // The languages the game's own files carry (DRACRO_US.CPK message sheets + localised menus).
+                static const char* const kLangIds[] = {"en", "fr", "es", "de", "it"};
+                static const char* const kLangNames[] = {"English", "Fran\xc3\xa7" "ais", "Espa\xc3\xb1" "ol", "Deutsch",
+                                                         "Italiano"};
+                int lang = 0;
+                for (int i = 0; i < 5; ++i)
+                    if (set.language == kLangIds[i]) lang = i;
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("Language:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(160 * scale);
+                if (ImGui::Combo("##language", &lang, kLangNames, 5)) set.language = kLangIds[lang];
+                ImGui::TextColored(kDim, "Game text and menus; applies the next time the game starts.");
             } else if (t == 3) {
                 auto text_field = [](const char* id, std::string& v, size_t cap, float w) {
                     char buf[512];
@@ -1276,6 +1325,9 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 ImGui::TextColored(kDim, "3-16 letters, digits, _ or -");
                 ImGui::Checkbox("Open the game port on the router (UPnP)", &set.upnp);
+                ImGui::Checkbox("Net trace (online diagnostics in the log)", &set.net_trace);
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "only when asked for a bug report; bigger log");
                 bool testing;
                 {
                     std::lock_guard<std::mutex> lk(conn.mu);
@@ -1481,8 +1533,13 @@ int main(int argc, char** argv) {
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().FramePadding.y);
                 if (ImGui::SmallButton("Show log")) ImGui::OpenPopup("Last run log");
             } else if (u_busy) ImGui::TextColored(kGold, "Updating the launcher...");
-            else if (!dump_ok(checks)) ImGui::TextColored(kWarn, "Select a complete, supported dump folder on the Game page.");
-            else if (!updated_msg.empty()) ImGui::TextColored(kGood, "%s", updated_msg.c_str());
+            else if (!dump_ok(checks)) {
+                // The reason, not just "incomplete": the short form (up to the first ':') here, all of it on hover.
+                std::string why = dump_problem(checks);
+                ImGui::TextColored(kBad, "Can't play: %s", why.substr(0, why.find(':')).c_str());
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", why.c_str());
+                if (ImGui::IsItemClicked()) page = 0;
+            } else if (!updated_msg.empty()) ImGui::TextColored(kGood, "%s", updated_msg.c_str());
             else ImGui::TextColored(kDim, "Ready to play.");
             ImGui::SameLine(ImGui::GetContentRegionMax().x - play.x);
             ImGui::SetCursorPosY(ImGui::GetStyle().WindowPadding.y);

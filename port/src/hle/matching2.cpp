@@ -125,7 +125,7 @@ struct MemberInfo {
 };
 
 enum class Kind { Hello, Worlds, SetUserInfo, CreateJoin, Join, Leave, Search, SetInternal, SetExternal, Endpoint,
-                  SetPresence, FriendList, Rehello, Resume };
+                  SetPresence, FriendList, Rehello, Resume, SearchProbe };
 struct Pending {
     Kind kind;
     uint32_t req_id = 0;  // the id the game got back (0 for internal requests)
@@ -163,6 +163,7 @@ bool g_link_lost = false;
 std::vector<std::pair<uint16_t, int32_t>> g_ctx_events;  // context events raised by Start/Stop, sent from the pump
 std::vector<Pending> g_local_done;  // requests answered without the lobby (unchanged room data), sent from the pump
 std::string g_last_external;        // last SetRoomDataExternal body sent to the lobby
+Json g_last_filters;                // filters of the last SearchRoom (an empty result logs why each room missed)
 uint16_t g_reported_port = 0;
 // Public endpoint (net.md 11): what we last told the lobby, and whether that is final for this socket.
 std::string g_reported_ip;           // "" = lobby uses the connection's address
@@ -596,6 +597,7 @@ DCP_SYSV int32_t sceNpMatching2SearchRoom(uint16_t, const uint8_t* req, const vo
         b["flag_filter"] = int64_t(0);
     }
     std::fprintf(stderr, "HLE sceNpMatching2SearchRoom %s\n", b.dump().c_str());
+    g_last_filters = b.get("filters");
     uint32_t r = issue(Kind::Search, "search", b, opt, kEvSearchRoom);
     if (req_id) *req_id = r;
     return kOk;
@@ -826,6 +828,27 @@ void matching2_pump() {
                     ++g_fl_gen;
                     continue;
                 }
+                if (p.kind == Kind::SearchProbe) {
+                    for (const Json& r : m.body.get("rooms").elems()) {
+                        if (r.get("room_id").as_u64() == g_room) continue;
+                        std::map<int, int64_t> ia;
+                        for (const Json& a : r.get("int_attrs").elems()) ia[int(a.get("id").as_int())] = a.get("value").as_int();
+                        std::string why;
+                        for (const Json& f : g_last_filters.elems()) {
+                            int id = int(f.get("id").as_int()), op = int(f.get("op").as_int());
+                            uint32_t want = uint32_t(f.get("value").as_int()), have = uint32_t(ia.count(id) ? ia[id] : 0);
+                            bool ok = op == 1 ? have == want : op == 2 ? have != want : op == 3 ? have < want
+                                    : op == 4 ? have <= want : op == 5 ? have > want : op == 6 ? have >= want : false;
+                            if (!ok) why += " " + std::to_string(id) + "=" + std::to_string(have) + "(op" + std::to_string(op) +
+                                            " " + std::to_string(want) + ")";
+                        }
+                        std::fprintf(stderr, "MATCHING2 search miss: room %s %lld/%lld members, 76=%lld 77=%lld 83=0x%llx; failed:%s\n",
+                                     r.get("room_id").as_string().c_str(), (long long)r.get("cur_members").as_int(),
+                                     (long long)r.get("max_slot").as_int(), (long long)ia[76], (long long)ia[77],
+                                     (long long)ia[83], why.empty() ? " none (flags / full?)" : why.c_str());
+                    }
+                    continue;
+                }
                 if (!p.cb) continue;  // internal request (endpoint, implicit leave)
                 auto a = std::make_shared<Arena>();
                 const void* data = nullptr;
@@ -856,6 +879,18 @@ void matching2_pump() {
                     case Kind::Search:
                         data = make_search_response(*a, m.body);
                         std::fprintf(stderr, "MATCHING2 search -> %lld room(s)\n", (long long)m.body.get("rooms").size());
+                        if (m.body.get("rooms").size() == 0 && g_last_filters.size() > 0) {
+                            // Nothing matched: list the world's rooms unfiltered once, so the log says which condition
+                            // each room failed (online_room_attrs.md 7). The game never sees this answer.
+                            Json q;
+                            q["world_id"] = int64_t(1);
+                            q["start"] = int64_t(1);
+                            q["max"] = int64_t(20);
+                            q["flag_filter"] = int64_t(0);
+                            q["flag_attr"] = int64_t(0);
+                            q["filters"] = Json::array();
+                            issue(Kind::SearchProbe, "search", q, nullptr, 0);
+                        }
                         break;
                     default: break;  // SetUserInfo / Leave / SetInternal / SetExternal: no response data
                     }
@@ -944,6 +979,10 @@ void matching2_pump() {
                 if (id != g_me && port) net::rudp::punch(ip, port);  // open our NAT towards it now (hole punching)
                 std::fprintf(stderr, "MATCHING2 signal: member 0x%x at %s:%lld\n", id, b.get("ip").as_string().c_str(),
                              (long long)b.get("port").as_int());
+                for (const auto& [oid, o] : g_signals)  // two PCs behind one router claiming one port: only one is reachable
+                    if (oid != id && oid != g_me && id != g_me && port && o.ip_be == ip && o.port_be == port)
+                        std::fprintf(stderr, "MATCHING2 members 0x%x and 0x%x share one public endpoint %s:%lld\n", oid, id,
+                                     b.get("ip").as_string().c_str(), (long long)b.get("port").as_int());
             } else if (m.ev == "signal_dead") {
                 uint16_t id = uint16_t(b.get("member_id").as_int());
                 auto it = g_signals.find(id);

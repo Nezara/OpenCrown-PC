@@ -75,6 +75,15 @@ uint16_t add_mapping(Igd& g, uint16_t port, int lease_s, std::string* why) {
         uint16_t ext = uint16_t(port + k);
         char ex[8];
         std::snprintf(ex, sizeof ex, "%u", ext);
+        // Another PC behind this router may already own the port (two players in one home). Some routers replace
+        // that mapping instead of answering 718, which leaves both PCs advertising one ip:port; skip it instead.
+        char cl[16] = {}, cp[6] = {}, desc[80] = {}, en[4] = {}, dur[16] = {};
+        if (UPNP_GetSpecificPortMappingEntry(g.urls.controlURL, g.data.first.servicetype, ex, "UDP", nullptr, cl, cp, desc,
+                                             en, dur) == 0 &&
+            (std::strcmp(cl, g.lan) != 0 || std::strcmp(cp, in) != 0)) {
+            *why = "UDP " + std::string(ex) + " already mapped to " + cl + ":" + cp;
+            continue;
+        }
         int r = -1;
         for (int attempt = 0; attempt < 2; ++attempt) {
             std::snprintf(lease, sizeof lease, "%d", attempt ? 0 : lease_s);

@@ -2,6 +2,7 @@
 // answer and logs its first call. Values marked guess are not verified against the game's checks.
 #include <atomic>
 #include <mutex>
+#include <cstdlib>
 #include <cstring>
 
 #include "common.h"
@@ -49,11 +50,26 @@ DCP_SYSV int32_t sceUserServiceGetLoginUserIdList(int32_t* list) {  // 4 slots, 
 }
 
 // ---- libSceSystemService ----
+// System language from $DCP_LANGUAGE (launcher Display tab: en / fr / es / de / it), as the PS4 LANG code. The game
+// maps it at start (FUN_00016da0 / FUN_00017750, jump tables 0x644ca8 / 0x644cfc): 2 / 22 -> French, 3 / 20 ->
+// Spanish, 4 -> German, 5 -> Italian, anything else -> English (US). The UK English sheets in DRACRO_US.CPK are
+// never selected by any LANG value.
+int32_t system_language() {
+    const char* l = std::getenv("DCP_LANGUAGE");
+    if (!l) return 1;
+    static const struct { const char* name; int32_t code; } kLangs[] = {
+        {"fr", 2}, {"es", 3}, {"de", 4}, {"it", 5},
+    };
+    for (auto& k : kLangs)
+        if (!std::strcmp(l, k.name)) return k.code;
+    return 1;
+}
+
 DCP_SYSV int32_t sceSystemServiceParamGetInt(int32_t id, int32_t* v) {
     if (!v) return int32_t(0x80A10003);
     int32_t r = 0;
     switch (id) {
-    case 1: r = 1; break;     // LANG: English (US)
+    case 1: r = system_language(); break;  // LANG (1 = English US)
     case 2: r = 1; break;     // DATE_FORMAT: mm/dd/yyyy
     case 3: r = 0; break;     // TIME_FORMAT: 12h
     case 4: r = 0; break;     // TIME_ZONE (minutes)

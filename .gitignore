@@ -25,3 +25,4 @@
 __pycache__/
 *.pyc
 dist/
+/android-port/vita_data/

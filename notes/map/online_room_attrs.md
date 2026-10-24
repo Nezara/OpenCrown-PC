@@ -379,3 +379,36 @@ $env:DCP_NP_NAME='GuestB'; $env:DCP_NET_PORT='3758'; $env:DCP_SAVE_ROOT='<saves-
 the *search* and the room listing should behave exactly as on two machines, but the subsequent P2P connect may fail on
 NAT hairpinning. A failed **join** on one PC is therefore not evidence against this map; the thing to read is whether
 B's `SearchRoom` returns A's room at all.
+
+## 7. Source of attr 0x53 bits [4:2] (`[[platform+0x120]+0x84]`) - 2026-10-23
+
+**Result: it is not the Normal/Hard/Infernal choice picked in a menu. It is a per-session "stage tier" dword that mirrors the
+active player's hero byte `hero+0x21a9`; 99 (0x63) = "no tier / any".** The hypothesis is only partly right: the value
+is read through a 0..4 -> {0,0,1,1,2} difficulty-index mapping (FUN_00024e40: `[obj+0x84]`, 99 -> 4, then FUN_0004c730 with
+table at 0x6aa4d0), so the game does use it as a three-step difficulty, but the stored raw value is 0..4 / 99.
+
+* Object: `[platform+0x120]` (platform = `FUN_004adce0(scene)` = `[[scene+0x70]+0x20]`; same object via scene vslot 0xd0) is a
+  game-session state block. `+0x84` dword = tier, `+0x88` byte = flag from FUN_00086ee0(hero) (first half running), `+0x70+0x19`
+  byte = (tier == 99).
+* **Writers of `+0x84` (all three are the same pair of stores)**:
+  1. `FUN_00026b40(players, value, slot)` at 26b93 (player array = `[scene+0x80]`, slots `+0xa8 + n*0x23b0`, n <= 3, slot must be
+     in use): also stores `hero+0x21a9 = value`. Callers: town scene `FUN_003c6a80` (3c6b86, 3c6bd3, 3c6c24, 3c6c75 - one call per
+     slot; value = 2 if FUN_00083ab0(hero) <= 2 else 4; FUN_00083ab0 maps the story counter `hero+0x6f`: 0x30/0x31 -> 2, > 0x31 -> 4,
+     else 0, i.e. loop 1 and 2 -> 2, loop 3 -> 4) and town portal handler `FUN_003c1770` (3c2490: value = `record+0x14` of the
+     selected round record, record = `FUN_0006a840(round)` = 32-byte entries, <= 20, base via data import 0xbc2368).
+  2. `FUN_00026820` at 26a2d (slot copy for a new/replaced player; copies `hero+0x21a9` from the source player, caller 436fb0).
+  3. `FUN_004296a0` at 42a8c1 (client "AC_STEP_*" connect state machine): copies a per-player byte received from the host into the
+     scene copy (`[scene+idx+0x24b9]`, unverified which wire field) and into `+0x84`.
+  `hero+0x21a9` is also part of the hero-record field serializers (FUN_000a9a70 / FUN_000aabe0 / FUN_000c45e0 / FUN_000c4d70), so it
+  travels with CREATEPLAYER / bones data; whether it is stored in SAVE0.DAT was not checked (unverified).
+* Readers: 99 selects "last visited stage" mode (`hero+0x21ca`, FUN_00083b10) instead of the tier-capped value (FUN_000871f0 =
+  min(`hero+0x30` u16, cap 2 / 5 / 98 by `hero+0x6f`)); consumers include 42ddc0, 478aa0/478ae0, 513be0, 50e2d0, 48d930, 521ce0.
+* **How a player changes it:** no option or difficulty menu writes it. In town it is reset to 2 or 4 from the story loop
+  (`hero+0x6f`) by FUN_003c6a80, and picking a portal destination overwrites it with that round's table value (FUN_003c1770).
+  So a town searcher has 2 (loop 1/2) or 4 (loop 3); a host that entered a round (value from the round record, 0 observed for
+  round 5) publishes that value.
+* **Original game:** the searcher passes the same field as condition slot 10 and the host publishes it in `info[0x54]`; the
+  friend-row predicate 4d32f0 compares it for equality (reason 2). Random search therefore only matches hosts whose published
+  value equals the searcher's current value; a host in a dungeon (0) and a searcher in town (2) mismatch unless the server
+  ignores the slot (server side not known). Hosts created from town publish the town value.
+* Open: the table behind 0xbc2368 (record +0x14 values per round); whether the server treats slot 10 as exact match.

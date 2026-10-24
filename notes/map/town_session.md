@@ -480,6 +480,10 @@ window (`547b90`), scene commands (`4355f0`) and the GameServer table (`2b9d0`, 
 headless two-instance runs with a scratch build (round end forced on the host, section 12.4). Fix 12.5 is in
 `port/src/hle/skip_offers.cpp` and `linux-port/src/hle/skip_offers.cpp` (on by default, `DCP_PARTY_RETURN=0` = off).
 
+**REVERTED in v1.0.5.1 (2026-10-24, user, after v1.0.5 shipped it):** players reported that it skips the spoils screen
+(no loot, no EXP) and the party return only reaches the portal area: heading on into town proper drops players out of
+the session. Fix 12.5 is removed from both trees; the analysis below stays as the map for a second attempt.
+
 ### 12.1 The result window is per player; nothing carries the host's answer (asm)
 - Each instance opens its own window 10 (class `519d70`) in Act mode 5 state 6; input is the local pad only
   (`4ae190` = window+0xf4 pad; vtable +0x118 / +0x120 move the cursor to row 1 / row 2, +0x128 confirms). Window state 8

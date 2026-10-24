@@ -161,76 +161,6 @@ void install_warning(uint8_t* base) {
     std::fprintf(stderr, "skip_offers: the first \"no\" to the story skip warns and asks again\n");
 }
 
-
-// Party return to town (town_session.md 12). Online, the result window's "Return to town" (answer 1) makes each
-// player leave the room on its own (Act mode 5 state 7, 0x430e4a host-bit-off + 0x430e54 Net::DissolveSession).
-// The game's own way back to town that keeps the party is the shared world map's "Return to town": the host's pick
-// is broadcast (scene command 0x7e6, +0x39 = 1 -> Act+0x110 = 1 on every member) and state 0xd loads Town00 for all.
-//   P at 0x42e9bf (state 7, answer = window+0x9108 -> Act+0x9314), only for answer 1, kinds 0/1/2/0xc (the ones that
-//     show the choice and reach state 10's default branch) and an online party (platform sys+0x16908 bit 0):
-//     guest -> answer 0 (it follows the host); host -> answer 0 and Act+0x110 = 1.
-//   T at 0x431171 (state 0xb host branch, `call 54b9d0` = world map +0x2d18 == -2 "town confirmed"): with Act+0x110
-//     set, write -2 first (what the map's "Return to town?" yes does at 0x548081), so the game sends its own town
-//     command. Act+0x110 is cleared in state 2 of every round end and set otherwise only by that command.
-constexpr uint32_t kAnswer = 0x42e9bf, kAnswerCont = 0x42e9cd, kTownCheck = 0x431171, kTownCheckFn = 0x54b9d0;
-constexpr uint8_t kAnswerBytes[] = {0x41, 0x8b, 0x84, 0x24, 0x08, 0x91, 0x00, 0x00, 0x89, 0x83, 0x14, 0x93, 0x00, 0x00};
-constexpr uint8_t kTownCheckBytes[] = {0xe8, 0x5a, 0xa8, 0x11, 0x00};
-
-void install_party_return(uint8_t* base) {
-    uint8_t *ans = base + kAnswer, *town = base + kTownCheck;
-    if (std::memcmp(ans, kAnswerBytes, sizeof kAnswerBytes) || std::memcmp(town, kTownCheckBytes, sizeof kTownCheckBytes)) {
-        std::fprintf(stderr, "skip_offers: unexpected bytes at the round-end sites; party return not installed\n");
-        return;
-    }
-    uint8_t* page = alloc_near(reinterpret_cast<uint64_t>(base) + 0x1300000, 0x1000);
-    if (!page) { std::fprintf(stderr, "skip_offers: no relay memory near the image; no party return\n"); return; }
-    const uint64_t b64 = reinterpret_cast<uint64_t>(base);
-    uint8_t *P = page, *T = page + 0x80;
-    Emit e{P};
-    e.b({0x41, 0x8b, 0x84, 0x24, 0x08, 0x91, 0x00, 0x00,   // mov eax,[r12+0x9108]   (original)
-         0x51, 0x52, 0x83, 0xf8, 0x01, 0x75, 0x36,         // push rcx; push rdx; cmp eax,1; jne done
-         0x8b, 0x93, 0xe8, 0x00, 0x00, 0x00,               // mov edx,[rbx+0xe8]      (kind)
-         0x83, 0xfa, 0x0c, 0x77, 0x2b,                     // cmp edx,0xc; ja done
-         0xb9, 0x07, 0x10, 0x00, 0x00, 0x0f, 0xa3, 0xd1,   // mov ecx,0x1007; bt ecx,edx
-         0x73, 0x21,                                       // jnc done
-         0x49, 0x8b, 0x4e, 0x78,                           // mov rcx,[r14+0x78]      (platform sys)
-         0xf6, 0x81, 0x08, 0x69, 0x01, 0x00, 0x01,         // test byte [rcx+0x16908],1 (online party)
-         0x74, 0x14,                                       // jz done
-         0x0f, 0xb7, 0x91, 0xf0, 0x68, 0x01, 0x00,         // movzx edx,word [rcx+0x168f0] (my slot, host slot)
-         0x38, 0xf2, 0x75, 0x07,                           // cmp dl,dh; jne zero    (guest)
-         0xc6, 0x83, 0x10, 0x01, 0x00, 0x00, 0x01,         // mov byte [rbx+0x110],1 (host: town for all)
-         0x31, 0xc0,                                       // zero: xor eax,eax
-         0x5a, 0x59,                                       // done: pop rdx; pop rcx
-         0x89, 0x83, 0x14, 0x93, 0x00, 0x00});             // mov [rbx+0x9314],eax   (original)
-    e.jmp_abs(b64 + kAnswerCont);
-    const size_t np = e.p - P;
-    e.p = T;
-    e.b({0x48, 0x8b, 0x44, 0x24, 0x20,                             // mov rax,[rsp+0x20] (Act, the caller's [rsp+0x18])
-         0x80, 0xb8, 0x10, 0x01, 0x00, 0x00, 0x01, 0x75, 0x0a,       // cmp byte [rax+0x110],1; jne orig
-         0xc7, 0x87, 0x18, 0x2d, 0x00, 0x00, 0xfe, 0xff, 0xff, 0xff}); // mov dword [rdi+0x2d18],-2
-    e.jmp_abs(b64 + kTownCheckFn);                                     // orig: tail-jump to 54b9d0
-    const size_t nt = e.p - T;
-    if (!fits_rel32(P, ans + 5) || !fits_rel32(T, town + 5)) {
-        std::fprintf(stderr, "skip_offers: relay out of rel32 range; no party return\n");
-        return;
-    }
-    if (const char* d = std::getenv("DCP_SKIP_DUMP"); d && *d && *d != '0') {
-        auto hex = [](const char* n, const uint8_t* p, size_t len) {
-            std::fprintf(stderr, "skip_offers: relay %s ", n);
-            for (size_t i = 0; i < len; ++i) std::fprintf(stderr, "%02x", p[i]);
-            std::fprintf(stderr, "\n");
-        };
-        hex("P", P, np), hex("T", T, nt);
-    }
-    uint8_t ja[14] = {0xe9, 0, 0, 0, 0, 0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00};  // jmp P; 9-byte nop
-    put_rel32(ja + 1, P, ans + 5);
-    write_code(ans, ja, sizeof ja);
-    uint8_t ct[5] = {0xe8};
-    put_rel32(ct + 1, T, town + 5);
-    write_code(town, ct, sizeof ct);
-    std::fprintf(stderr, "skip_offers: online \"Return to town\" follows the host and keeps the party (eboot+0x%x, +0x%x)\n",
-                 kAnswer, kTownCheck);
-}
 }  // namespace
 
 void install(uint8_t* base) {
@@ -245,7 +175,6 @@ void install(uint8_t* base) {
         std::fprintf(stderr, "skip_offers: %s (eboot+0x%x)\n", p.what, p.site);
     }
     if (!off("DCP_STORY_SKIP") && !off("DCP_SKIP_WARNING")) install_warning(base);
-    if (!off("DCP_PARTY_RETURN")) install_party_return(base);
 }
 
 }  // namespace dcp::skip_offers

@@ -15,6 +15,9 @@
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-feature android:name="android.hardware.type.pc" android:required="false" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- The launcher's Update page installs newer OpenCrownMobile APKs from the GitHub releases (Update.java). Every
+         release needs a higher versionCode than the one before, or Android refuses the update. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Online play: the lobby (WebSocket / TLS), STUN and the P2P / RUDP socket (src/net, hle/net.cpp). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- The dump, saves and settings live in Internal storage/OpenCrown/ (RetroArch style): Android 11+ needs

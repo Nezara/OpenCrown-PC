@@ -57,7 +57,7 @@ public class LauncherActivity extends Activity {
 
     File root;                 // Internal storage/OpenCrown
     DumpCheck dump;            // last scan
-    int page = 0;              // 0 game, 1 save folder, 2 controls, 3 display, 4 online, 5 report a bug
+    int page = 0;              // 0 game, 1 save folder, 2 controls, 3 display, 4 online, 5 report a bug, 6 update
     LinearLayout content;
     ScrollView scroll;
     TextView status;
@@ -72,6 +72,14 @@ public class LauncherActivity extends Activity {
         if (resumeGame()) return;
         root = new File(Environment.getExternalStorageDirectory(), "OpenCrown");
         buildUi();
+        startUpdates();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (updReceiver != null) unregisterReceiver(updReceiver);
+        updCancel.set(true);
     }
 
     @Override
@@ -264,6 +272,26 @@ public class LauncherActivity extends Activity {
             tabs.add(t);
             side.addView(t, new LinearLayout.LayoutParams(-1, -2));
         }
+        // Update entry and its state line, pinned to the bottom of the sidebar (as on the PC launcher).
+        side.addView(new View(this), new LinearLayout.LayoutParams(-1, 0, 1));
+        final TextView upd = text("Update", 18, TEXT);
+        upd.setTypeface(Typeface.SERIF, Typeface.BOLD);
+        upd.setPadding(dp(12), dp(4), dp(12), dp(2));
+        upd.setFocusable(true);
+        upd.setClickable(true);
+        upd.setOnClickListener(new View.OnClickListener() { public void onClick(View v) {
+            if (page != 6) scroll.scrollTo(0, 0);
+            page = 6;
+            capturing = null;
+            refresh();
+        } });
+        tabs.add(upd);
+        side.addView(upd, new LinearLayout.LayoutParams(-1, -2));
+        updState = text("", 12, DIM);
+        updState.setPadding(dp(12), 0, dp(12), 0);
+        updState.setSingleLine(true);
+        updState.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        side.addView(updState);
 
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
@@ -356,13 +384,15 @@ public class LauncherActivity extends Activity {
         for (int i = 0; i < tabs.size(); i++)
             tabs.get(i).setBackground(i == page ? box(SELECTED, dp(4)) : new ColorDrawable(Color.TRANSPARENT));
         content.removeAllViews();
-        if (!access) pageAccess();
+        if (page == 6) pageUpdate();  // works without storage access too
+        else if (!access) pageAccess();
         else if (page == 0) pageGame();
         else if (page == 1) pageSaves();
         else if (page == 2) pageControls();
         else if (page == 3) pageDisplay();
         else if (page == 4) pageOnline();
         else pageReport();
+        showUpdState();
         boolean ready = dump != null && dump.ready();
         play.setEnabled(ready);
         play.setTextColor(ready ? 0xff2a1a08 : 0xff6b5d4b);
@@ -1309,6 +1339,262 @@ public class LauncherActivity extends Activity {
                 if (page == 5) refresh();
             } });
         } }).start();
+    }
+
+    // --- Update (Update.java: GitHub releases -> newer OpenCrownMobile APK, checked, installed by Android) --------
+    // OpenCrown/launcher.ini check_updates = the PC launcher's key: the start-up check, on unless set to false.
+    TextView updState;
+    boolean updBusy, updChecked, updDownloading, updCommitted;
+    long updGot, updTotal;
+    Update.Result updResult;
+    String updError, updatedFrom;
+    final java.util.concurrent.atomic.AtomicBoolean updCancel = new java.util.concurrent.atomic.AtomicBoolean();
+    android.content.BroadcastReceiver updReceiver;
+
+    File updMarker() { return new File(getFilesDir(), "update_from.txt"); }  // the version an install started from
+
+    boolean checkUpdatesOn() {
+        String v = new Ini(new File(root, "launcher.ini")).get("check_updates");
+        return v == null || !(v.equals("0") || v.equalsIgnoreCase("false"));
+    }
+
+    void startUpdates() {
+        updReceiver = new android.content.BroadcastReceiver() {
+            public void onReceive(android.content.Context c, Intent i) { installStatus(i); }
+        };
+        android.content.IntentFilter f = new android.content.IntentFilter(Update.ACTION_STATUS);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(updReceiver, f, RECEIVER_NOT_EXPORTED);
+        else registerReceiver(updReceiver, f);
+        File m = updMarker();
+        if (m.isFile()) {
+            String from = "";
+            try (java.io.FileInputStream in = new java.io.FileInputStream(m)) {
+                from = new String(SaveFile.readAll(in, 256), "UTF-8").trim();
+            } catch (IOException ignored) {
+            }
+            m.delete();
+            int[] was = Update.parseVersion(from), now = Update.parseVersion(appVersion());
+            if (was != null && now != null && Update.compare(now, was) > 0) {
+                updatedFrom = from;
+                page = 6;
+                refresh();
+            }
+        }
+        if (checkUpdatesOn()) runUpdateCheck();
+    }
+
+    void updRedraw() {
+        if (page == 6) refresh();
+        else showUpdState();
+    }
+
+    void runUpdateCheck() {
+        if (updBusy) return;
+        updBusy = true;
+        updError = null;
+        updRedraw();
+        final String cur = appVersion();
+        new Thread(new Runnable() { public void run() {
+            final Update.Result r = Update.check(cur);
+            runOnUiThread(new Runnable() { public void run() {
+                updBusy = false;
+                updChecked = true;
+                updResult = r;
+                updRedraw();
+            } });
+        } }).start();
+    }
+
+    void runUpdateDownload() {
+        final Update.Result r = updResult;
+        if (updBusy || r == null || !r.haveTarget) return;
+        updBusy = updDownloading = true;
+        updError = null;
+        updGot = 0;
+        updTotal = r.asset.size;
+        updCancel.set(false);
+        refresh();
+        final String cur = appVersion();
+        new Thread(new Runnable() { public void run() {
+            try (FileOutputStream o = new FileOutputStream(updMarker())) {
+                o.write(cur.getBytes("UTF-8"));
+            } catch (IOException ignored) {
+            }
+            final String err = Update.download(LauncherActivity.this, r.asset, cur, new Update.Progress() {
+                long shown = -1;
+                public void at(final long got, long total) {
+                    long pct = got * 100 / Math.max(total, 1);
+                    if (pct == shown) return;
+                    shown = pct;
+                    runOnUiThread(new Runnable() { public void run() {
+                        updGot = got;
+                        updRedraw();
+                    } });
+                }
+            }, updCancel);
+            runOnUiThread(new Runnable() { public void run() {
+                updBusy = updDownloading = false;
+                if (err != null) {
+                    updError = err;
+                    updMarker().delete();
+                } else updCommitted = true;
+                updRedraw();
+            } });
+        } }).start();
+    }
+
+    // PackageInstaller's answers to the committed session.
+    void installStatus(Intent i) {
+        int st = i.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999);
+        if (st == android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            Intent confirm = (Intent) i.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirm != null) {
+                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                try {
+                    startActivity(confirm);
+                    return;
+                } catch (Exception e) {
+                    updError = "could not show Android's install prompt: " + e;
+                }
+            }
+        } else if (st == android.content.pm.PackageInstaller.STATUS_SUCCESS) {
+            return;  // this process normally ends before getting here; the user opens the app again
+        } else if (st == android.content.pm.PackageInstaller.STATUS_FAILURE_ABORTED) {
+            updError = "the install was cancelled";
+        } else {
+            String msg = i.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE);
+            updError = "Android did not install it" + (msg == null || msg.isEmpty() ? "" : ": " + msg)
+                    + (st == android.content.pm.PackageInstaller.STATUS_FAILURE_CONFLICT
+                       || st == android.content.pm.PackageInstaller.STATUS_FAILURE_INCOMPATIBLE
+                       ? " (an app signed differently, e.g. a build of your own, is installed: uninstall it first; "
+                         + "your saves and settings in Internal storage/OpenCrown stay)" : "");
+        }
+        updCommitted = false;
+        updMarker().delete();
+        updRedraw();
+    }
+
+    boolean installAllowed() {
+        return getPackageManager().canRequestPackageInstalls();
+    }
+
+    // The sidebar line under "Update" (and the gold dot when an update is waiting).
+    void showUpdState() {
+        if (updState == null) return;
+        Update.Result r = updResult;
+        String s;
+        int c = DIM;
+        boolean avail = false;
+        if (updatedFrom != null) { s = "Updated to v" + appVersion(); c = OK; }
+        else if (updDownloading) { s = "Downloading... " + (updTotal > 0 ? updGot * 100 / updTotal : 0) + "%"; c = GOLD; }
+        else if (updBusy) s = "Checking...";
+        else if (!updChecked) s = "v" + appVersion();
+        else if (!r.ok) s = "Update check failed";
+        else if (r.haveTarget) { s = "v" + r.latest + " available"; c = GOLD; avail = true; }
+        else s = "Up to date (v" + appVersion() + ")";
+        updState.setText(s);
+        updState.setTextColor(c);
+        tabs.get(6).setTextColor(page == 6 || avail ? GOLD : TEXT);
+        tabs.get(6).setText(avail || updDownloading ? "Update  ●" : "Update");
+    }
+
+    void pageUpdate() {
+        heading("Update");
+        final Update.Result r = updResult;
+        if (updatedFrom != null) para("Updated to v" + appVersion() + " (from v" + updatedFrom + ").").setTextColor(OK);
+        LinearLayout vr = row();
+        vr.addView(text("Current version: v" + appVersion(), 15, TEXT));
+        String latest = updBusy && !updDownloading ? "checking..." : !updChecked ? "not checked yet"
+                : !r.ok ? "unknown" : "v" + (r.latest.isEmpty() ? appVersion() : r.latest);
+        span(vr, "     Latest version: " + latest, updChecked && r.ok ? TEXT : DIM).setTextSize(15);
+
+        if (updChecked && !r.ok && !updBusy) para("Update check failed: " + r.error).setTextColor(BAD);
+        else if (updChecked && r.ok && !updBusy) {
+            if (r.haveTarget) para(String.format(Locale.ROOT, "Update available: v%s (%s, %.1f MB)", r.latest,
+                    r.asset.name, r.asset.size / 1048576.0)).setTextColor(GOLD);
+            else para("You are up to date.").setTextColor(OK);
+        }
+        boolean canInstall = updChecked && r.ok && r.haveTarget;
+        if (canInstall && r.asset.sha256.isEmpty()) {
+            para("The release lists no SHA-256 checksum for " + r.asset.name + ", so it is not installed "
+                    + "automatically. Get it from the release page.").setTextColor(WARN);
+            canInstall = false;
+        }
+        final boolean needAllow = canInstall && !installAllowed();
+        if (needAllow)
+            para("Android needs your OK once before OpenCrown Mobile can install its own updates: tap Allow, turn on "
+                    + "\"Allow from this source\", then come back.").setTextColor(WARN);
+
+        LinearLayout br = row();
+        Button first = null;
+        if (needAllow) {
+            first = smallButton(br, "Allow", new View.OnClickListener() { public void onClick(View v) {
+                try {
+                    startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+                } catch (Exception e) {
+                    updError = "could not open the setting: " + e;
+                    refresh();
+                }
+            } });
+        } else if (canInstall) {
+            first = smallButton(br, updDownloading ? "Downloading..." : updCommitted ? "Installing..." : "Download and install",
+                    new View.OnClickListener() { public void onClick(View v) { runUpdateDownload(); } });
+            first.setEnabled(!updBusy && !updCommitted);
+        }
+        Button again = smallButton(br, updBusy && !updDownloading ? "Checking..." : "Check again", new View.OnClickListener() {
+            public void onClick(View v) { updatedFrom = null; runUpdateCheck(); }
+        });
+        again.setEnabled(!updBusy);
+        ((LinearLayout.LayoutParams) (first != null ? first : again).getLayoutParams()).leftMargin = 0;
+        smallButton(br, "Open release page", new View.OnClickListener() { public void onClick(View v) {
+            String url = r != null && r.page.startsWith("https://") ? r.page : Update.RELEASES_PAGE;
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (Exception ignored) {
+            }
+        } });
+
+        if (updDownloading || (updGot > 0 && updError != null)) {
+            android.widget.ProgressBar pb = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            pb.setMax(1000);
+            pb.setProgress(updTotal > 0 ? (int) (updGot * 1000 / updTotal) : 0);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(12));
+            lp.topMargin = dp(10);
+            content.addView(pb, lp);
+            para(String.format(Locale.ROOT, "%.1f / %.1f MB", updGot / 1048576.0, updTotal / 1048576.0)).setTextColor(DIM);
+        }
+        if (updCommitted && updError == null)
+            para("Downloaded and checked. Confirm the update in Android's prompt, then open OpenCrown Mobile again.")
+                    .setTextColor(OK);
+        if (updError != null) para("Update failed: " + updError).setTextColor(BAD);
+
+        if (haveAccess()) {
+            android.widget.CheckBox cb = new android.widget.CheckBox(this);
+            cb.setText("Check for updates when the launcher starts");
+            cb.setTextColor(TEXT);
+            cb.setChecked(checkUpdatesOn());
+            cb.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+                public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                    new Ini(new File(root, "launcher.ini")).set("check_updates", on ? "true" : "false");
+                }
+            });
+            content.addView(cb);
+        }
+        para("Updates come from the OpenCrown GitHub releases. Your saves and settings in Internal storage/OpenCrown "
+                + "are not touched.").setTextColor(DIM);
+
+        if (updChecked && r.ok && r.haveTarget) {
+            sub("What's new");
+            for (String[] l : Update.noteLines(r.notes)) {
+                if (l[0].isEmpty()) { content.addView(new View(this), new LinearLayout.LayoutParams(-1, dp(6))); continue; }
+                boolean top = l[0].equals("H"), h = top || l[0].equals("h");
+                TextView t = text(l[1], top ? 17 : h ? 15 : 14, h ? GOLD : TEXT);
+                if (h) t.setTypeface(Typeface.SERIF, Typeface.BOLD);
+                if (h) t.setPadding(0, dp(top ? 6 : 3), 0, dp(1));
+                else t.setPadding(0, dp(1), 0, dp(1));
+                content.addView(t);
+            }
+        }
     }
 
     // --- play ------------------------------------------------------------------------------------------------------

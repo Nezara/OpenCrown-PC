@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)  # Ubuntu 22.04 stock cmake
 project(OpenCrownLinux C CXX)
-set(OPENCROWN_VERSION "1.0.5.1")  # Linux build; versioned separately from the Windows build in ../port
+set(OPENCROWN_VERSION "1.0.5.2")  # Linux build; versioned separately from the Windows build in ../port
 # Updater end-to-end tests build a fake newer release in a separate build dir (packaging/make-appimage.sh, OC_VERSION).
 if(OPENCROWN_VERSION_OVERRIDE)
   set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")

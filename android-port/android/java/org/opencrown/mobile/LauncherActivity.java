@@ -51,6 +51,7 @@ import java.util.Locale;
 // closes. Everything the game uses lives in that one folder, RetroArch style: the user copies the dump there once.
 public class LauncherActivity extends Activity {
     static final String TITLE_ID = "PCSE00019";
+    static final String EXTRA_GAME_FAILED = "org.opencrown.mobile.GAME_FAILED";  // OpenCrownActivity: main() returned
 
     static final int GOLD = 0xffe2b15a, TEXT = 0xffe8dccb, DIM = 0xffa89a86, OK = 0xff8fc46a, BAD = 0xffd9785f;
     static final int PANEL = 0xd9171310, SIDEBAR = 0xd91c1712, SELECTED = 0xff6b4a1f, BG = 0xff120e0b;
@@ -65,6 +66,7 @@ public class LauncherActivity extends Activity {
     final List<TextView> tabs = new ArrayList<>();
     ImageView icon;
     FrameLayout frame;
+    String lastFailure;        // why the last start failed (status bar), null = no failure
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -73,6 +75,58 @@ public class LauncherActivity extends Activity {
         root = new File(Environment.getExternalStorageDirectory(), "OpenCrown");
         buildUi();
         startUpdates();
+        if (saved == null && getIntent().getBooleanExtra(EXTRA_GAME_FAILED, false)) showGameFailed();
+    }
+
+    // --- failed start ----------------------------------------------------------------------------------------------
+    // The game stopped before it ran: say why (the loader's "mobile_run: <reason>" line in log.txt) and show the end
+    // of the log, rather than leaving the player on the home screen with nothing.
+    void showGameFailed() {
+        List<String> tail = logTail(logFile(), 40);
+        String reason = null;
+        for (String l : tail) if (l.startsWith("mobile_run: ")) reason = l.substring("mobile_run: ".length());
+        lastFailure = reason != null ? reason : "it stopped before the first frame";
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(8), dp(20), 0);
+        box.addView(text(reason != null ? capitalize(reason) + "."
+                : "It stopped before the first frame. The end of the log below may say why.", 15, TEXT));
+        TextView log = text(tail.isEmpty() ? "(log.txt is empty)" : String.join("\n", tail), 11, DIM);
+        log.setTypeface(Typeface.MONOSPACE);
+        log.setTextIsSelectable(true);
+        log.setPadding(0, dp(10), 0, dp(4));
+        ScrollView s = new ScrollView(this);
+        s.addView(log);
+        box.addView(s, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(180)));
+        box.addView(text("Full log: " + logFile().getAbsolutePath(), 11, DIM));
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("The game couldn't start").setView(box)
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Report a bug", new android.content.DialogInterface.OnClickListener() {
+                    public void onClick(android.content.DialogInterface d, int w) { page = 5; refresh(); }
+                })
+                .show();
+        refresh();
+    }
+
+    static String capitalize(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    // Last n lines of a text file (reads at most its last 64 KB); empty when missing.
+    static List<String> logTail(File f, int n) {
+        List<String> lines = new ArrayList<>();
+        try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
+            long len = in.length(), from = Math.max(0, len - 65536);
+            byte[] b = new byte[(int) (len - from)];
+            in.seek(from);
+            in.readFully(b);
+            String[] all = new String(b, java.nio.charset.StandardCharsets.UTF_8).split("\r?\n");
+            for (int i = Math.max(from > 0 ? 1 : 0, all.length - n); i < all.length; i++) lines.add(all[i]);
+        } catch (IOException e) {
+            // no log yet
+        }
+        return lines;
     }
 
     @Override
@@ -196,13 +250,45 @@ public class LauncherActivity extends Activity {
             if (!new File(r.game.dir, "eboot.bin").isFile()) r.game.problem = "has no eboot.bin";
             else if (!new File(r.game.dir, "DRACRO.CPK").isFile()) r.game.problem = "has no DRACRO.CPK";
         }
+        String why;
         if (r.update != null && r.update.problem == null) {
             if (!new File(r.update.dir, "eboot.bin").isFile()) r.update.problem = "has no eboot.bin";
+            else if ((why = selfProblem(new File(r.update.dir, "eboot.bin"))) != null) r.update.problem = why;
             else if (!"01.09".equals(r.update.version)) r.update.problem = "is version " + r.update.version + "; update 1.09 is needed (install it on your Vita and dump it again)";
         }
         describe(r, r.game, "Base game", "dump/Game");
         describe(r, r.update, "Update 1.09", "dump/Update");
         return r;
+    }
+
+    // The loader's rule (src/guest/image.cpp): a SELF ("SCE\0") whose loadable segments are flagged encrypted (segment
+    // info +0x18 == 1) was copied off the Vita without decrypting; the game would stop at once. A folder without
+    // sce_pfs/ can still hold such an eboot.bin. null = fine (decrypted SELF or plain ELF).
+    static String selfProblem(File eboot) {
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(eboot, "r")) {
+            byte[] magic = new byte[4];
+            f.readFully(magic);
+            if (magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') return null;
+            if (magic[0] != 'S' || magic[1] != 'C' || magic[2] != 'E' || magic[3] != 0)
+                return "has an eboot.bin that is not a Vita executable (damaged copy?): dump it again";
+            long elf = u64(f, 0x40), phdr = u64(f, 0x48), seginfo = u64(f, 0x58);
+            f.seek(elf + 0x2c);
+            int phnum = Short.reverseBytes(f.readShort()) & 0xffff;
+            for (int i = 0; i < phnum; i++) {
+                f.seek(phdr + i * 0x20L);
+                int type = Integer.reverseBytes(f.readInt());  // readX throw at the end of the file (cut short)
+                if (type == 1 && u64(f, seginfo + i * 0x20L + 0x18) == 1)
+                    return "has an eboot.bin that is still encrypted: dump the game decrypted again";
+            }
+            return null;
+        } catch (IOException e) {
+            return "has an eboot.bin that is cut short (incomplete copy): copy it again";
+        }
+    }
+
+    static long u64(java.io.RandomAccessFile f, long at) throws IOException {
+        f.seek(at);
+        return Long.reverseBytes(f.readLong());
     }
 
     void describe(DumpCheck r, Part p, String what, String where) {
@@ -398,7 +484,9 @@ public class LauncherActivity extends Activity {
         play.setTextColor(ready ? 0xff2a1a08 : 0xff6b5d4b);
         play.setBackground(box(ready ? 0xffc99545 : 0xff3a3026, dp(6)));
         status.setText(!access ? "Storage access needed." : migrating != null ? migrating
+                : ready && lastFailure != null ? "Last start failed: " + lastFailure
                 : ready ? "Ready to play." : "Game files missing - see Game.");
+        status.setTextColor(ready && lastFailure != null && migrating == null ? BAD : DIM);
         if (migrating != null) play.setEnabled(false);
     }
 
@@ -1626,6 +1714,7 @@ public class LauncherActivity extends Activity {
         if (!upnpOn()) args.add("--no-upnp");
         Intent i = new Intent(this, OpenCrownActivity.class);
         i.putExtra(OpenCrownActivity.EXTRA_ARGS, args.toArray(new String[0]));
+        if (OpenCrownActivity.mainFinished()) { RestartActivity.restartInto(this, i); return; }  // after a failed start
         startActivity(i);
         finish();
     }

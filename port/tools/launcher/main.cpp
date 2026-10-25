@@ -337,7 +337,67 @@ struct Game {
     std::vector<std::string> tail; // last lines of the log after a failure
     bool show_tail = false;        // open the log popup on the next frame
     std::string error;             // launch error
+    std::string why;               // the exit code in words ("" = nothing known about it)
+    std::string headline;          // the log's first line that names the problem ("" = none found)
+    bool log_empty = false;        // the game wrote nothing: it stopped before its first line
+    bool redist_hint = false;      // a DLL was missing: offer the Microsoft runtime page
 };
+
+constexpr const char* kRedistUrl = "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist";
+
+// What an exit code means for the player. dcp_run's own codes: 1 = startup error (a "dcp_run: " line says which),
+// 2 = bad command line, 3 = crash caught by its fault handler (FAULT line). The rest are Windows NTSTATUS codes from a
+// process that died before or outside that handler.
+std::string exit_reason(DWORD code, bool* redist) {
+    *redist = false;
+    switch (code) {
+    case 1: return "The game could not start.";
+    case 2: return "The launcher passed the game a bad option (please report this).";
+    case 3: return "The game crashed.";
+    case 0xC0000135:  // STATUS_DLL_NOT_FOUND
+        *redist = true;
+        return "Windows could not find a DLL the game needs: SDL3.dll next to the launcher, or the Windows C runtime. "
+               "Extract the whole zip again (antivirus may have removed a file). On Windows 7 / 8.1, install the "
+               "Microsoft Visual C++ Redistributable (x64), which brings the C runtime.";
+    case 0xC0000139:  // STATUS_ENTRYPOINT_NOT_FOUND
+        return "SDL3.dll does not match the game (an older copy?). Extract the whole zip again into an empty folder.";
+    case 0xC000007B:  // STATUS_INVALID_IMAGE_FORMAT
+        return "A DLL next to the game is the wrong kind (32-bit, or damaged). Extract the whole zip again.";
+    case 0xC0000142:  // STATUS_DLL_INIT_FAILED
+        return "A DLL failed to start (often after a Windows update or with overlay software). Restart the PC and try again.";
+    case 0xC0000005: return "The game crashed (memory access violation).";
+    case 0xC000001D: return "The game crashed (illegal instruction: the CPU may be too old for it).";
+    case 0xC00000FD: return "The game crashed (stack overflow).";
+    case 0xC0000374: return "The game crashed (heap corruption).";
+    case 0xC0000409: return "The game crashed (stopped itself after a fatal error).";
+    case 0xC000013A: case 0x40010004: return "The game was closed from outside (Task Manager, antivirus or Windows).";
+    default: return "";
+    }
+}
+
+// The first log line that names the problem: dcp_run's FAULT report or startup error, or the window / OpenGL setup.
+std::string log_headline(const std::string& path, bool* empty) {
+    std::ifstream f(path);
+    std::string line;
+    *empty = true;
+    static const char* keys[] = {"FAULT 0x", "dcp_run: ", "SDL_Init: ", "SDL_CreateWindow: ", "GL context: ",
+                                 "missing GL entry point"};
+    while (std::getline(f, line)) {
+        if (!line.empty()) *empty = false;
+        for (const char* k : keys)
+            if (line.rfind(k, 0) == 0) return line;
+    }
+    return "";
+}
+
+std::string create_process_error(DWORD e) {
+    switch (e) {
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: return "dcp_run.exe is missing (removed by antivirus?). Extract the whole zip again.";
+    case ERROR_ACCESS_DENIED: return "Windows refused to start dcp_run.exe (blocked by antivirus or SmartScreen?). Allow it and try again.";
+    case ERROR_BAD_EXE_FORMAT: return "dcp_run.exe is damaged or not for this PC (64-bit Windows needed). Extract the whole zip again.";
+    default: return "Windows could not start dcp_run.exe (error " + std::to_string(e) + ").";
+    }
+}
 
 std::vector<std::string> log_tail(const std::string& path, size_t n) {
     std::ifstream f(path);
@@ -415,10 +475,10 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
                              &si.StartupInfo, &pi);
     if (have_list) DeleteProcThreadAttributeList(attrs);
     CloseHandle(log);
-    if (!ok) { g.error = "CreateProcess failed (error " + std::to_string(GetLastError()) + ")"; return false; }
+    if (!ok) { g.error = create_process_error(GetLastError()); return false; }
     CloseHandle(pi.hThread);
     g.proc = pi.hProcess;
-    g.failed = false, g.tail.clear(), g.error.clear();
+    g.failed = false, g.tail.clear(), g.error.clear(), g.why.clear(), g.headline.clear();
     return true;
 }
 
@@ -429,7 +489,10 @@ void poll_game(Game& g, const std::string& log_path) {
     CloseHandle(g.proc);
     g.proc = nullptr;
     g.failed = g.exit_code != 0;
-    if (g.failed) g.tail = log_tail(log_path, 30), g.show_tail = true;
+    if (!g.failed) return;
+    g.tail = log_tail(log_path, 60), g.show_tail = true;
+    g.why = exit_reason(g.exit_code, &g.redist_hint);
+    g.headline = log_headline(log_path, &g.log_empty);
 }
 
 // ---- folder dialog (SDL calls back on another thread on some platforms) ----
@@ -1528,7 +1591,18 @@ int main(int argc, char** argv) {
             if (running) ImGui::TextColored(kGood, "The game is running.");
             else if (!game.error.empty()) ImGui::TextColored(kBad, "%s", game.error.c_str());
             else if (game.failed) {
-                ImGui::TextColored(kBad, "The game exited with code %lu.", (unsigned long)game.exit_code);
+                // The short reason here (the exit code in words, else the log's headline), everything on hover.
+                const size_t dot = game.why.find(". ");
+                const bool own = game.exit_code == 1 || game.exit_code == 3;  // dcp_run's codes: the log says more
+                std::string s = own && !game.headline.empty() ? game.why + " " + game.headline
+                              : !game.why.empty() ? game.why.substr(0, dot == std::string::npos ? dot : dot + 1)
+                              : !game.headline.empty() ? game.headline
+                                                       : "The game exited with code " + std::to_string(game.exit_code) + ".";
+                ImGui::TextColored(kBad, "%s", s.c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Exit code %lu (0x%08lX)%s%s", (unsigned long)game.exit_code,
+                                      (unsigned long)game.exit_code, game.headline.empty() ? "" : "\n",
+                                      game.headline.c_str());
                 ImGui::SameLine();
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().FramePadding.y);
                 if (ImGui::SmallButton("Show log")) ImGui::OpenPopup("Last run log");
@@ -1566,12 +1640,25 @@ int main(int argc, char** argv) {
         }
         ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.85f, io.DisplaySize.y * 0.7f), ImGuiCond_Appearing);
         if (ImGui::BeginPopupModal("Last run log", nullptr)) {
-            ImGui::TextColored(kBad, "The game exited with code %lu. Last lines of %s:", (unsigned long)game.exit_code,
-                               native(log_path).c_str());
+            ImGui::TextColored(kBad, "The game exited with code %lu (0x%08lX).", (unsigned long)game.exit_code,
+                               (unsigned long)game.exit_code);
+            if (!game.why.empty()) ImGui::TextWrapped("%s", game.why.c_str());
+            if (!game.headline.empty()) {
+                ImGui::TextColored(kDim, "From the log:");
+                ImGui::SameLine();
+                ImGui::TextWrapped("%s", game.headline.c_str());
+            }
+            ImGui::TextColored(kDim, "%s", game.log_empty ? "The game wrote nothing to its log: it stopped before it started."
+                                                          : ("Last lines of " + native(log_path) + ":").c_str());
             ImGui::BeginChild("##tail", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 1.3f), ImGuiChildFlags_Borders,
                               ImGuiWindowFlags_HorizontalScrollbar);
             for (const std::string& l : game.tail) ImGui::TextUnformatted(l.c_str());
             ImGui::EndChild();
+            if (game.redist_hint) {
+                if (ImGui::Button("Get the Visual C++ Redistributable"))
+                    ShellExecuteW(nullptr, L"open", widen(kRedistUrl).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                ImGui::SameLine();
+            }
             if (ImGui::Button("Open log")) open_in_explorer(log_path);
             ImGui::SameLine();
             if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();

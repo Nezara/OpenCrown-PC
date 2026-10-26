@@ -34,7 +34,10 @@ constexpr size_t kFragment = 1200;        // payload per DATA datagram (stays un
 constexpr size_t kMaxMessage = 4u << 20;  // reassembly cap
 constexpr uint32_t kWindow = 256;         // DATA datagrams in flight
 constexpr uint32_t kRxWindow = 1024;      // out-of-order datagrams buffered
-constexpr int kMaxRetries = 40;
+constexpr int kMaxRetries = 40;           // timeouts of one fragment, or dark-link timeouts in a row = dead peer
+constexpr uint64_t kMaxRto = 2000;        // backoff cap (ms): the idle timeout notices a dead peer, not the backoff
+constexpr size_t kRtoBurst = 32;          // fragments resent per timeout while the link is dark
+constexpr uint64_t kStallLogMs = 2000;    // log a link whose oldest unacked fragment / inbound gap is this old
 
 uint64_t now_ms() {
     return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -57,9 +60,9 @@ struct Frag {
     uint32_t seq = 0;
     bool last = false;
     std::vector<uint8_t> data;
-    uint64_t sent_ms = 0;
-    int retries = 0;      // timeout retransmissions (backoff, dead peer)
-    bool resent = false;  // any retransmission (Karn: no RTT sample)
+    uint64_t sent_ms = 0, first_ms = 0;  // last / first transmission
+    int retries = 0;                     // timeout retransmissions (backoff, dead peer)
+    bool resent = false;                 // any retransmission (Karn: no RTT sample)
 };
 
 struct Conn {
@@ -76,11 +79,22 @@ struct Conn {
     std::map<uint32_t, Frag> inflight;
     size_t queued = 0;
     double srtt = 100, rttvar = 50;
+    // Retransmission: per-fragment timers while ACKs make progress. Once none has for a base RTO the link is "dark":
+    // one connection timer then resends only the oldest kRtoBurst per (backed-off) timeout, so an outage is not hit
+    // with the whole window every time, and hearing from the peer retries at once (probe(); bug report 26).
+    uint64_t progress_ms = 0;   // last ACK that acked something, or a send into an empty window
+    uint64_t rto_start = 0;     // dark: last connection timeout
+    int backoff = 0;            // dark: connection timeouts since the last progress
     // receive side
     uint32_t rx_next = 0;
     std::map<uint32_t, std::pair<bool, std::vector<uint8_t>>> ooo;
     std::vector<uint8_t> assembling;
     bool ack_due = false;
+    // diagnostics: stall lines while it happens, totals when the link closes (bug report logs)
+    uint64_t stall_ms = 0;      // logged send stall: when it began (0 = none)
+    uint64_t rx_gap_ms = 0;     // inbound: waiting for rx_next with later fragments buffered since (0 = no gap)
+    bool rx_gap_logged = false;
+    uint64_t sent_frags = 0, timeouts = 0, rto_resends = 0, fast_resends = 0, probes = 0, longest_stall = 0;
 };
 
 struct Event {
@@ -162,7 +176,7 @@ public:
         std::lock_guard<std::mutex> lk(mu_);
         auto it = conns_.find(id);
         if (it == conns_.end()) return;
-        if (it->second.st == LinkState::Connected) send_ctl(it->second, kFin);
+        if (it->second.st == LinkState::Connected) send_ctl(it->second, kFin), log_link(it->second, "closed here");
         conns_.erase(it);
     }
     uint16_t local_port() const override { return port_; }
@@ -219,6 +233,7 @@ private:
 
     void raw_send(const Conn& c, const uint8_t* buf, size_t len) {
         if (opt_.drop_every_n > 0 && ++tx_count_ % unsigned(opt_.drop_every_n) == 0) return;
+        if (opt_.drop && opt_.drop(len)) return;
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_port = c.peer.port_be;
@@ -274,10 +289,13 @@ private:
     }
     // Move unsent fragments into flight while the window allows.
     void pump_send(Conn& c, uint64_t t) {
+        if (c.inflight.empty() && !c.unsent.empty()) c.progress_ms = t;
         while (!c.unsent.empty() && c.inflight.size() < kWindow) {
             Frag f = std::move(c.unsent.front());
             c.unsent.pop_front();
             uint32_t s = f.seq;
+            f.first_ms = t;
+            ++c.sent_frags;
             send_frag(c, c.inflight.emplace(s, std::move(f)).first->second, t);
         }
     }
@@ -285,10 +303,59 @@ private:
         double base = c.srtt + 4 * c.rttvar;
         if (base < 30) base = 30;
         if (base > 1000) base = 1000;
-        return uint64_t(base) << (retries < 4 ? retries : 4);
+        return std::min(uint64_t(base) << (retries < 6 ? retries : 6), kMaxRto);
+    }
+    bool dark(const Conn& c, uint64_t t) const { return !c.inflight.empty() && t - c.progress_ms >= rto(c, 0); }
+    // Heard from the peer while the link is dark: the path works again, so retry the oldest fragment now instead of
+    // at the next backed-off timeout (at most once per base RTO).
+    void probe(Conn& c, uint64_t t) {
+        if (!dark(c, t)) return;
+        Frag& h = c.inflight.begin()->second;
+        if (t - h.sent_ms < rto(c, 0)) return;
+        h.resent = true;
+        send_frag(c, h, t);
+        ++c.probes;
+    }
+    // One line when the oldest unacked fragment (or an inbound gap) passes kStallLogMs, one when the stall is over.
+    void stall_log(Conn& c, uint64_t t) {
+        uint64_t head = c.inflight.empty() ? 0 : c.inflight.begin()->second.first_ms;
+        if (!c.stall_ms && head && t - head >= kStallLogMs) {
+            c.stall_ms = head;
+            std::fprintf(stderr,
+                         "UDPC conn %d: send stall, oldest unacked fragment %llu ms old (%zu in flight, %zu queued, "
+                         "srtt %.0f ms, rttvar %.0f, %d timeouts in a row, peer heard %llu ms ago)\n",
+                         c.id, (unsigned long long)(t - head), c.inflight.size(), c.unsent.size(), c.srtt, c.rttvar,
+                         c.backoff, (unsigned long long)(t - c.last_rx_ms));
+        } else if (c.stall_ms && (!head || t - head < kStallLogMs)) {
+            c.longest_stall = std::max(c.longest_stall, t - c.stall_ms);
+            std::fprintf(stderr,
+                         "UDPC conn %d: send stall over after %llu ms (so far %llu timeouts, resends %llu timed / %llu "
+                         "fast / %llu probe)\n",
+                         c.id, (unsigned long long)(t - c.stall_ms), (unsigned long long)c.timeouts,
+                         (unsigned long long)c.rto_resends, (unsigned long long)c.fast_resends,
+                         (unsigned long long)c.probes);
+            c.stall_ms = 0;
+        }
+        if (c.rx_gap_ms && !c.rx_gap_logged && t - c.rx_gap_ms >= kStallLogMs) {
+            c.rx_gap_logged = true;
+            std::fprintf(stderr, "UDPC conn %d: inbound gap, waiting %llu ms for fragment %u (%zu later ones buffered)\n",
+                         c.id, (unsigned long long)(t - c.rx_gap_ms), c.rx_next, c.ooo.size());
+        }
+    }
+    void log_link(Conn& c, const char* why) {
+        if (!c.sent_frags) return;
+        if (c.stall_ms) c.longest_stall = std::max(c.longest_stall, now_ms() - c.stall_ms);
+        std::fprintf(stderr,
+                     "UDPC conn %d %s: %llu fragments sent, %llu timeouts, resends %llu timed / %llu fast / %llu probe, "
+                     "longest stall %llu ms, srtt %.0f ms\n",
+                     c.id, why, (unsigned long long)c.sent_frags, (unsigned long long)c.timeouts,
+                     (unsigned long long)c.rto_resends, (unsigned long long)c.fast_resends,
+                     (unsigned long long)c.probes, (unsigned long long)c.longest_stall, c.srtt);
     }
     void close(Conn& c, CloseReason r, std::vector<Event>& ev) {
         if (c.st == LinkState::Closed) return;
+        static const char* const kWhy[] = {"closed here", "closed by the peer", "timed out", "reset", "failed"};
+        log_link(c, kWhy[int(r)]);
         c.st = LinkState::Closed;
         c.unsent.clear();
         c.inflight.clear();
@@ -355,6 +422,7 @@ private:
         }
         if (c->st != LinkState::Connected || session != c->peer_session) return;
         c->last_rx_ms = t;
+        if (type != kAck) probe(*c, t);
         switch (type) {
         case kData: {
             if (n < kHeader + 5) return;
@@ -362,6 +430,7 @@ private:
             bool last = b[kHeader + 4] & 1;
             c->ack_due = true;
             if (seq_lt(seq, c->rx_next) || seq - c->rx_next >= kRxWindow) return;
+            uint32_t rx_was = c->rx_next;
             c->ooo.emplace(seq, std::make_pair(last, std::vector<uint8_t>(b + kHeader + 5, b + n)));
             for (auto it = c->ooo.find(c->rx_next); it != c->ooo.end(); it = c->ooo.find(c->rx_next)) {
                 auto& [l, d] = it->second;
@@ -374,11 +443,19 @@ private:
                 c->ooo.erase(it);
                 ++c->rx_next;
             }
+            if (c->rx_gap_ms && (c->rx_next != rx_was || c->ooo.empty())) {
+                if (c->rx_gap_logged)
+                    std::fprintf(stderr, "UDPC conn %d: inbound gap filled after %llu ms\n", c->id,
+                                 (unsigned long long)(t - c->rx_gap_ms));
+                c->rx_gap_ms = 0, c->rx_gap_logged = false;
+            }
+            if (!c->ooo.empty() && !c->rx_gap_ms) c->rx_gap_ms = t;
             break;
         }
         case kAck: {
             if (n < kHeader + 8) return;
             uint32_t next = get32(b + kHeader), bits = get32(b + kHeader + 4);
+            size_t progress = 0;
             auto acked = [&](std::map<uint32_t, Frag>::iterator it) {
                 if (!it->second.resent) {  // Karn: RTT samples only from first transmissions
                     double r = double(t - it->second.sent_ms);
@@ -386,6 +463,7 @@ private:
                     c->srtt = 0.875 * c->srtt + 0.125 * r;
                 }
                 c->queued -= it->second.data.size();
+                ++progress;
                 return c->inflight.erase(it);
             };
             for (auto it = c->inflight.begin(); it != c->inflight.end();)
@@ -395,6 +473,8 @@ private:
                     auto it = c->inflight.find(next + 1 + i);
                     if (it != c->inflight.end()) acked(it);
                 }
+            if (progress) c->progress_ms = t, c->backoff = 0;
+            probe(*c, t);  // an ACK that acked nothing on a dark link
             // Fast retransmit: holes below the highest selectively acked seq are resent without waiting for the RTO
             // (at most once per smoothed RTT each).
             if (bits) {
@@ -404,6 +484,7 @@ private:
                     if (it != c->inflight.end() && double(t - it->second.sent_ms) >= std::max(c->srtt, 5.0)) {
                         it->second.resent = true;
                         send_frag(*c, it->second, t);
+                        ++c->fast_resends;
                     }
                 }
             }
@@ -474,13 +555,30 @@ private:
             if (c.st != LinkState::Connected) continue;
             if (t - c.last_rx_ms > opt_.idle_timeout_ms) { close(c, CloseReason::Timeout, ev); continue; }
             bool dead = false;
-            for (auto& [s, f] : c.inflight)
-                if (t - f.sent_ms >= rto(c, f.retries)) {
-                    if (++f.retries > kMaxRetries) { dead = true; break; }
-                    f.resent = true;
-                    send_frag(c, f, t);
+            if (dark(c, t)) {
+                if (c.backoff == 0 || t - c.rto_start >= rto(c, c.backoff)) {
+                    if (++c.backoff > kMaxRetries) { close(c, CloseReason::Timeout, ev); continue; }
+                    ++c.timeouts;
+                    c.rto_start = t;
+                    size_t n = 0;
+                    for (auto it = c.inflight.begin(); it != c.inflight.end() && n < kRtoBurst; ++it, ++n) {
+                        ++it->second.retries;
+                        it->second.resent = true;
+                        send_frag(c, it->second, t);
+                    }
+                    c.rto_resends += n;
                 }
+            } else {
+                for (auto& [s, f] : c.inflight)
+                    if (t - f.sent_ms >= rto(c, f.retries)) {
+                        if (++f.retries > kMaxRetries) { dead = true; break; }
+                        f.resent = true;
+                        send_frag(c, f, t);
+                        ++c.rto_resends;
+                    }
+            }
             if (dead) { close(c, CloseReason::Timeout, ev); continue; }
+            stall_log(c, t);
             pump_send(c, t);
             if (c.ack_due) send_ack(c);
             if (t - c.last_tx_ms >= 1000) send_ctl(c, kPing);

@@ -8,6 +8,7 @@
 // Connections are keyed by (peer ip, peer UDP port, Rudp port; both ends use the same Rudp port). A session nonce per
 // connect() detects a restarted peer (SYN with a new session while connected = reset).
 #pragma once
+#include <functional>
 #include <memory>
 
 #include "net/carrier.h"
@@ -18,6 +19,7 @@ struct UdpCarrierOptions {
     uint16_t port = 0;                 // host order; 0 = any free port
     uintptr_t adopt_socket = ~uintptr_t(0);  // an already bound UDP socket fd to use instead (e.g. chosen by an ICE layer)
     int drop_every_n = 0;              // test only: drop every n-th outgoing datagram (deterministic loss)
+    std::function<bool(size_t len)> drop;  // test only: return true to lose this outgoing datagram (I/O lock held)
     unsigned connect_timeout_ms = 15000;
     unsigned idle_timeout_ms = 10000;  // no datagram from a connected peer for this long = Timeout
 };

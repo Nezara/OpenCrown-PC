@@ -412,7 +412,13 @@ Code: `port/src/net/` (host C++, lib `dcp_net`) + SysV entry points in `port/src
   rudpPort)` (both sides call it), `send(conn, msg)` reliable+ordered whole messages, `queued_bytes`, `state`, `disconnect`;
   `CarrierSink` events on_connected / on_message / on_closed) -> `UdpCarrier` (own framing over one UDP socket, format in
   `udp_carrier.h`: SYN/SYNACK simultaneous open, 1200-byte fragments, cumulative ACK + 32-bit SACK, fast retransmit, RTO with backoff,
-  1 s keepalive, 10 s idle / 15 s connect timeout, session nonce for peer restarts). Own framing instead of ENet: Rudp needs a symmetric
+  1 s keepalive, 10 s idle / 15 s connect timeout, session nonce for peer restarts). Retransmission (2026-10-25, bug report 26: a
+  guest frozen 30-45 s, no disconnect): per-fragment RTOs while ACKs make progress, backoff capped at 2 s; once no ACK has acked
+  anything for a base RTO the link is "dark" and one connection timer resends only the oldest 32 fragments per timeout (the old code
+  resent the whole 256-fragment window every round into a dead link and backed off to 16 s per try); any datagram from the peer on a
+  dark link resends the oldest fragment at once. Wire format unchanged. Log lines `UDPC conn N: send stall` / `inbound gap` (oldest
+  unacked fragment or inbound hole older than 2 s, and when it ends) and a per-link summary on close (timeouts, timed / fast / probe
+  resends, longest stall, srtt) show transport stalls in bug-report logs. `test_net` `test_carrier_blackout` covers it. Own framing instead of ENet: Rudp needs a symmetric
   simultaneous open (ENet would make two peers per pair and need a tie-break), the carrier must run on a socket a NAT-traversal step
   may pick (`UdpCarrierOptions::adopt_socket`), and no fetch dependency.
 - **Mapping:** one carrier per P2P socket; Rudp context <-> carrier ConnId per socket; a connection is (peer ip, peer UDP port, Rudp

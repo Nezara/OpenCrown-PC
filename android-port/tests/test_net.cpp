@@ -91,6 +91,7 @@ static void test_carrier_lossy() {
     CHECK(ca >= 0 && cb >= 0);
     CHECK(wait_until(1000, [&] { return a->state(ca) == LinkState::Connected && b->state(cb) == LinkState::Connected; }));
     constexpr int kN = 120;
+    auto sent = Clock::now();
     for (int i = 0; i < kN; ++i) {
         auto m = pattern(msg_size(i), 1000 + i);
         CHECK(a->send(ca, m.data(), m.size()));
@@ -98,6 +99,8 @@ static void test_carrier_lossy() {
         CHECK(b->send(cb, r.data(), r.size()));
     }
     CHECK(wait_until(1500, [&] { return sb.count() == kN && sa.count() == kN; }));
+    std::printf("lossy: %lld ms for %d messages each way\n",
+                (long long)std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - sent).count(), kN);
     CHECK(wait_until(500, [&] { return a->queued_bytes(ca) == 0 && b->queued_bytes(cb) == 0; }));
     for (int i = 0; i < kN && i < int(sb.msgs.size()); ++i) CHECK(sb.msgs[i] == pattern(msg_size(i), 1000 + i));
     for (int i = 0; i < kN && i < int(sa.msgs.size()); ++i) CHECK(sa.msgs[i] == pattern(msg_size(i) / 3 + 1, 5000 + i));
@@ -106,6 +109,62 @@ static void test_carrier_lossy() {
     CHECK(wait_until(1000, [&] { return b->state(cb) == LinkState::Closed; }));
     CHECK(sb.closed == 1 && (sb.reason == CloseReason::PeerClosed || sb.reason == CloseReason::Timeout));
     CHECK(!b->send(cb, reinterpret_cast<const uint8_t*>("x"), 1));
+}
+
+// An outage shorter than the idle timeout while a backlog larger than the send window waits (bug report 26: a guest
+// frozen for 30-45 s, no disconnect). Every datagram is lost both ways for 2.5 s while b keeps sending small messages,
+// as the game does. The link must survive, the backlog must arrive soon after the outage (not at the next backed-off
+// retransmit), and the sender must not resend its whole window on every timeout while the link is dark.
+static void test_carrier_blackout() {
+    Sink sa, sb;
+    std::atomic<bool> dark{false};
+    std::atomic<int> dark_data{0};  // DATA-sized datagrams a sent while dark
+    UdpCarrierOptions oa, ob;
+    oa.idle_timeout_ms = ob.idle_timeout_ms = 5000;
+    oa.drop = [&](size_t len) {
+        if (dark && len > 100) ++dark_data;
+        return dark.load();
+    };
+    ob.drop = [&](size_t) { return dark.load(); };
+    auto a = make_udp_carrier(oa, &sa), b = make_udp_carrier(ob, &sb);
+    CHECK(a && b);
+    if (!a || !b) return;
+    ConnId ca = a->connect(loopback(b->local_port(), 4649), 20), cb = b->connect(loopback(a->local_port(), 4649), 20);
+    CHECK(wait_until(1000, [&] { return a->state(ca) == LinkState::Connected && b->state(cb) == LinkState::Connected; }));
+    constexpr int kWarm = 50, kBacklog = 400;  // backlog: 2 fragments each, 800 > the 256 window
+    for (int i = 0; i < kWarm; ++i) {  // RTT samples, so the RTO is the loopback one
+        auto m = pattern(64, 9000 + i);
+        a->send(ca, m.data(), m.size());
+    }
+    CHECK(wait_until(1000, [&] { return sb.count() == kWarm; }));
+    std::atomic<bool> stop{false};
+    std::thread chatter([&] {
+        for (int i = 0; !stop; ++i) {
+            auto m = pattern(20, 20000 + i);
+            b->send(cb, m.data(), m.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
+    dark = true;
+    for (int i = 0; i < kBacklog; ++i) {
+        auto m = pattern(1500, 10000 + i);
+        CHECK(a->send(ca, m.data(), m.size()));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+    int sent_dark = dark_data;
+    dark = false;
+    auto lit = Clock::now();
+    CHECK(wait_until(3000, [&] { return sb.count() == kWarm + kBacklog; }));
+    long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - lit).count();
+    std::printf("blackout: backlog in %lld ms after the outage, %d data datagrams sent during it\n", ms, sent_dark);
+    CHECK(ms < 150);
+    CHECK(sent_dark < 600);
+    stop = true;
+    chatter.join();
+    CHECK(a->state(ca) == LinkState::Connected && b->state(cb) == LinkState::Connected);
+    CHECK(sa.closed == 0 && sb.closed == 0);
+    for (int i = 0; i < kBacklog && kWarm + i < int(sb.msgs.size()); ++i)
+        CHECK(sb.msgs[kWarm + i] == pattern(1500, 10000 + i));
 }
 
 static int32_t g_ca, g_cb;
@@ -408,6 +467,7 @@ int main(int argc, char** argv) {
     test_reflexive_port();
     test_lan_candidate();
     test_carrier_lossy();
+    test_carrier_blackout();
     test_rudp();
     test_peer_table();
     double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();

@@ -1,5 +1,9 @@
 package org.opencrown.mobile;
 
+import android.os.Build;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.content.Intent;
 
 import org.libsdl.app.SDLActivity;
@@ -41,5 +45,34 @@ public class OpenCrownActivity extends SDLActivity {
     protected String[] getArguments() {
         String[] a = getIntent() != null ? getIntent().getStringArrayExtra(EXTRA_ARGS) : null;
         return a != null ? a : new String[0];
+    }
+
+    // SDLActivity.onCreate shows the bars (setWindowStyle(false)) and the native SDL_WINDOW_FULLSCREEN request only
+    // goes through the deprecated setSystemUiVisibility, once, which modern Android (targetSdk 35) does not keep
+    // after a focus change. Hide them again ourselves with the same insets API as the launcher, every time we get
+    // focus back (start, Home and back, a dialog or the shade closing).
+    @Override
+    public void onWindowFocusChanged(boolean focus) {
+        super.onWindowFocusChanged(focus);
+        if (focus) {
+            hideSystemBars();
+            getWindow().getDecorView().post(new Runnable() { public void run() { hideSystemBars(); } });
+        }
+    }
+
+    void hideSystemBars() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.systemBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
+                    | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        }
     }
 }

@@ -184,7 +184,7 @@ endforeach()
 find_package(Threads REQUIRED)
 add_library(dcp_net STATIC src/net/sock.cpp src/net/net.cpp src/net/udp_carrier.cpp src/net/stun.cpp src/net/upnp.cpp
   src/net/rudp.cpp src/net/json.cpp src/net/ws.cpp src/net/lobby_client.cpp src/net/lobby_server.cpp src/net/tls.cpp
-  src/net/online_check.cpp src/net/identity.cpp src/net/friends.cpp src/net/bug_report.cpp)
+  src/net/online_check.cpp src/net/identity.cpp src/net/friends.cpp src/net/bug_report.cpp src/net/chat.cpp)
 target_include_directories(dcp_net PUBLIC src)
 target_compile_options(dcp_net PRIVATE ${DCP_WARN})
 target_link_libraries(dcp_net PUBLIC Threads::Threads PRIVATE libminiupnpc-static mbedtls mbedx509 mbedcrypto)
@@ -208,7 +208,7 @@ if(ANDROID)
   set(SDL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
   add_subdirectory("${DCP_SDL3_SOURCE}" sdl3 EXCLUDE_FROM_ALL)
   add_library(main SHARED tools/mobile_run/main.cpp src/platform/sdl_app.cpp src/platform/touch_controls.cpp
-    src/platform/text_entry.cpp src/platform/android_launcher.cpp)
+    src/platform/text_entry.cpp src/platform/overlay_text.cpp src/platform/chat_overlay.cpp src/platform/android_launcher.cpp)
   target_compile_definitions(main PRIVATE OC_WINDOW=1)
   target_compile_options(main PRIVATE ${DCP_WARN})
   target_link_libraries(main PRIVATE mobile_core SDL3::SDL3-shared android log)
@@ -218,7 +218,8 @@ endif()
 add_executable(mobile_run tools/mobile_run/main.cpp)
 target_link_libraries(mobile_run PRIVATE mobile_core)
 if(SDL3_FOUND)
-  target_sources(mobile_run PRIVATE src/platform/sdl_app.cpp src/platform/touch_controls.cpp src/platform/text_entry.cpp)
+  target_sources(mobile_run PRIVATE src/platform/sdl_app.cpp src/platform/touch_controls.cpp src/platform/text_entry.cpp
+    src/platform/overlay_text.cpp src/platform/chat_overlay.cpp)
   target_compile_definitions(mobile_run PRIVATE OC_WINDOW=1)
   target_link_libraries(mobile_run PRIVATE SDL3::SDL3)
   add_custom_command(TARGET mobile_run POST_BUILD

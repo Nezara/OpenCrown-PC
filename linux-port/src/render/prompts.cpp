@@ -13,9 +13,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
-#include "gl.h"
-
-using namespace dcp::gl;
+#include "device.h"
 
 namespace dcp::render {
 namespace {
@@ -98,7 +96,7 @@ const PromptCell* Prompts::find(float u, float v) const {
 void Prompts::set_bindings(const std::map<std::string, std::string>& b) {
     binds_ = b;
     for (Glyph& g : cache_) {
-        if (g.tex) glDeleteTextures(1, &g.tex);
+        if (g.tex && dev) dev->destroy(g.tex);
         g = Glyph{};
     }
 }
@@ -319,14 +317,7 @@ unsigned Prompts::glyph(PadBtn b, float* aspect) {
             if (k.size() == 6 && (k.compare(0, 5, "Mouse") == 0 || k.compare(0, 5, "mouse") == 0)) mb = k[5] - '0';
             Canvas cv = mb >= 1 && mb <= 3 ? mouse_glyph(mb) : keycap(mb ? "M" + std::to_string(mb) : short_key(k));
             std::vector<uint8_t> px = cv.rgba();
-            glGenTextures(1, &g.tex);
-            glBindTexture(GL_TEXTURE_2D, g.tex);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, cv.w, cv.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            if (dev) g.tex = dev->upload(0, TexFormat::RGBA8, cv.w, cv.h, px.data(), px.size(), true);
             g.aspect = float(cv.w) / float(cv.h);
             if (log) std::fprintf(stderr, "prompt: glyph %s = '%s' %dx%d\n", pad_btn_name(b), k.c_str(), cv.w, cv.h);
         }

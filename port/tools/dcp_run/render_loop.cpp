@@ -1,14 +1,16 @@
-// dcp_run's GL side: owns the SDL3 window + GL context on the process main thread and replays the frames the
-// capture hooks hand over at each flip (src/render/README.md).
+// dcp_run's render side: owns the SDL3 window + SDL GPU device (OpenGL context as the fallback) on the process main
+// thread and replays the frames the capture hooks hand over at each flip (src/render/README.md).
 #include "render_loop.h"
 
 #include <SDL3/SDL.h>
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "chat_box.h"
 #include "ime_box.h"
 #include "sdl_input.h"
 #include "render/backend.h"
@@ -17,30 +19,115 @@
 #include "render/png.h"
 #include "../common/input_defaults.h"
 
+namespace {
+
+const char* kTitle = "Dragon's Crown Pro (dcp_run)";
+
+SDL_WindowFlags window_flags(const RenderOptions& o) {
+    return SDL_WINDOW_RESIZABLE | (o.window ? 0 : SDL_WINDOW_HIDDEN) |
+           (o.window && o.fullscreen ? SDL_WINDOW_FULLSCREEN : 0);  // no mode set = borderless desktop
+}
+
+// SDL GPU renderer (Vulkan / D3D12, SDL picks; SDL_GPU_DRIVER forces one). Hidden runs (--render / --shot without
+// --window) need no swapchain: the window is not claimed. On failure everything made here is destroyed and *why says
+// what failed. DCP_GPU_FAIL=1 makes it fail after device creation (test switch for the OpenGL fallback).
+bool open_gpu(const RenderOptions& o, SDL_Window** win, SDL_GPUDevice** dev, std::unique_ptr<dcp::render::Device>* out,
+              std::string* why) {
+    *win = SDL_CreateWindow(kTitle, o.width, o.height, window_flags(o));
+    if (!*win) { *why = std::string("window: ") + SDL_GetError(); return false; }
+    *dev = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL, false, nullptr);
+    bool claimed = false;
+    auto undo = [&](const std::string& reason) {
+        *why = reason;
+        out->reset();
+        if (claimed) SDL_ReleaseWindowFromGPUDevice(*dev, *win);
+        if (*dev) SDL_DestroyGPUDevice(*dev), *dev = nullptr;
+        SDL_DestroyWindow(*win), *win = nullptr;
+        return false;
+    };
+    if (!*dev) return undo(std::string("no SDL GPU device: ") + SDL_GetError());
+    const char* fail = std::getenv("DCP_GPU_FAIL");
+    if (fail && *fail && *fail != '0') return undo("DCP_GPU_FAIL is set (test switch)");
+    if (o.window) {
+        if (!SDL_ClaimWindowForGPUDevice(*dev, *win)) return undo(std::string("swapchain: ") + SDL_GetError());
+        claimed = true;
+        // Uncapped like the GL path's swap interval 0 (the game paces itself): mailbox, else immediate, else vsync.
+        SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
+        const char* name = "vsync";
+        if (SDL_WindowSupportsGPUPresentMode(*dev, *win, SDL_GPU_PRESENTMODE_MAILBOX))
+            mode = SDL_GPU_PRESENTMODE_MAILBOX, name = "mailbox";
+        else if (SDL_WindowSupportsGPUPresentMode(*dev, *win, SDL_GPU_PRESENTMODE_IMMEDIATE))
+            mode = SDL_GPU_PRESENTMODE_IMMEDIATE, name = "immediate";
+        if (!SDL_SetGPUSwapchainParameters(*dev, *win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+            return undo(std::string("swapchain parameters: ") + SDL_GetError());
+        std::fprintf(stderr, "render: SDL GPU present mode %s\n", name);
+    }
+    std::string err;
+    *out = dcp::render::make_gpu_device(*dev, o.window ? *win : nullptr, &err);
+    if (!*out) return undo(err);
+    const char* gpu_name = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(*dev), SDL_PROP_GPU_DEVICE_NAME_STRING, nullptr);
+    std::fprintf(stderr, "render: SDL GPU (%s) on %s\n", SDL_GetGPUDeviceDriver(*dev), gpu_name ? gpu_name : "?");
+    return true;
+}
+
+// The IME box's ImGui pass inside the SDL GPU swapchain pass.
+struct ImeOverlay final : dcp::render::Device::Overlay {
+    ImeBox* ime;
+    explicit ImeOverlay(ImeBox* i) : ime(i) {}
+    void prepare(void* cmd) override { ime->gpu_prepare(cmd); }
+    void render(void* cmd, void* pass) override { ime->gpu_render(cmd, pass); }
+};
+
+}  // namespace
+
 int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(int)) {
     if (!SDL_Init(SDL_INIT_VIDEO)) { std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_Window* win = SDL_CreateWindow("Dragon's Crown Pro (dcp_run)", o.width, o.height,
-                                       SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | (o.window ? 0 : SDL_WINDOW_HIDDEN) |
-                                       (o.window && o.fullscreen ? SDL_WINDOW_FULLSCREEN : 0));  // no mode set = borderless desktop
-    if (!win) { std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
-    SDL_GLContext ctx = SDL_GL_CreateContext(win);
-    if (!ctx) { std::fprintf(stderr, "GL context: %s\n", SDL_GetError()); return 1; }
-    if (const char* miss = dcp::gl::load([](const char* n) { return (void*)SDL_GL_GetProcAddress(n); })) {
-        std::fprintf(stderr, "missing GL entry point %s\n", miss);
-        return 1;
-    }
-    SDL_GL_SetSwapInterval(0);  // the game paces itself (vblank shim)
-    std::fprintf(stderr, "render: GL %s on %s\n", (const char*)dcp::gl::glGetString(GL_VERSION),
-                 (const char*)dcp::gl::glGetString(GL_RENDERER));
+    SDL_Window* win = nullptr;
+    SDL_GPUDevice* gpu = nullptr;
+    SDL_GLContext ctx = nullptr;
     dcp::render::Backend be;
-    if (!be.init()) return 1;
+    if (o.renderer != "gl") {
+        std::unique_ptr<dcp::render::Device> dev;
+        std::string why;
+        if (!open_gpu(o, &win, &gpu, &dev, &why)) {
+            if (o.renderer == "gpu") {
+                std::fprintf(stderr, "render: SDL GPU failed (--renderer gpu, no fallback): %s\n", why.c_str());
+                return 1;
+            }
+            std::fprintf(stderr, "render: OpenGL fallback: %s\n", why.c_str());
+        } else if (!be.init(std::move(dev))) {
+            std::fprintf(stderr, "render: SDL GPU backend init failed\n");
+            return 1;
+        }
+    }
+    if (!gpu) {  // OpenGL 3.3 (--renderer gl, or the auto fallback)
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        win = SDL_CreateWindow(kTitle, o.width, o.height, SDL_WINDOW_OPENGL | window_flags(o));
+        if (!win) { std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
+        ctx = SDL_GL_CreateContext(win);
+        if (!ctx) { std::fprintf(stderr, "GL context: %s\n", SDL_GetError()); return 1; }
+        if (const char* miss = dcp::gl::load([](const char* n) { return (void*)SDL_GL_GetProcAddress(n); })) {
+            std::fprintf(stderr, "missing GL entry point %s\n", miss);
+            return 1;
+        }
+        SDL_GL_SetSwapInterval(0);  // the game paces itself (vblank shim)
+        std::fprintf(stderr, "render: GL %s on %s\n", (const char*)dcp::gl::glGetString(GL_VERSION),
+                     (const char*)dcp::gl::glGetString(GL_RENDERER));
+        if (!be.init()) return 1;
+    }
     be.set_prompt_bindings(prompt_bindings(o.input_dir.empty() ? dcp::user_dir() : o.input_dir));
     // Name entry (sceImeDialog): only drawn with live input; scripted / hidden runs finish it headless (hle/ime.h).
     ImeBox ime;
-    if (o.window && o.input) ime.init(win, ctx);
+    ImeOverlay ime_overlay(&ime);
+    if (o.window && o.input) {
+        if (gpu) ime.init_gpu(win, gpu);
+        else ime.init(win, ctx);
+    }
+    // Room text chat overlay (net/chat.h), drawn into the name box's ImGui context.
+    ChatBox chat;
+    chat.init(ime.ok(), o.input_dir.empty() ? dcp::user_dir() : o.input_dir);
     // Button prompts follow the last-used device (DeviceTracker in the live input source). Test hook for scripted runs:
     // DCP_PROMPT_EVENTS=1100=key,1300=pad feeds a synthetic key press (E) / gamepad button (south) at those vblanks
     // through the same tracker code.
@@ -60,16 +147,19 @@ int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(in
 
     size_t next_shot = 0;
     // F1: frame stats in the window title (game flips/s, mean flip interval, host replay+present cost per frame).
-    const char* kTitle = "Dragon's Crown Pro (dcp_run)";
     const bool stats_log = std::getenv("DCP_STATS") != nullptr;  // stats on from the start, also written to stderr
     bool stats = stats_log;
     uint64_t stat_t0 = SDL_GetTicksNS(), stat_flips = 0, stat_work = 0, stat_draws = 0;
     for (;;) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_QUIT) finish(0);
+            if (e.type == SDL_EVENT_QUIT) {
+                std::fprintf(stderr, "render: window closed\n");
+                finish(0);
+            }
             if (o.input) o.input->handle_event(e);
             ime.handle_event(e);
+            chat.handle_event(e, ime.blocking());
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_F1 && !e.key.repeat) {
                 stats = !stats;
                 stat_t0 = SDL_GetTicksNS(), stat_flips = stat_work = stat_draws = 0;
@@ -77,7 +167,7 @@ int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(in
             }
         }
         if (o.input) {
-            o.input->set_blocked(ime.blocking());
+            o.input->set_blocked(ime.blocking() || chat.blocking());
             o.input->update(win);
         }
         if (WaitForSingleObject(static_cast<HANDLE>(game_thread), 0) == WAIT_OBJECT_0) finish(0);
@@ -110,9 +200,26 @@ int run_render_loop(const RenderOptions& o, void* game_thread, void (*finish)(in
         if (o.window) {
             int w, h;
             SDL_GetWindowSizeInPixels(win, &w, &h);
-            be.present(w, h);
-            if (o.input) ime.frame(win);
-            SDL_GL_SwapWindow(win);
+            // Name box + chat share one ImGui frame. SDL GPU: built first, drawn inside the present's swapchain pass.
+            // GL: drawn after the game picture, before the swap.
+            auto overlay = [&] {
+                if (!o.input) return;
+                const bool ime_on = ime.update(win), chat_on = chat.update(win, ime_on);
+                if (ime_on || chat_on) {
+                    ime.begin_frame(win);
+                    if (chat_on) chat.draw(win);
+                    if (ime_on) ime.draw(win);
+                    ime.end_frame();
+                }
+            };
+            if (gpu) {
+                overlay();
+                be.present(w, h, &ime_overlay);
+            } else {
+                be.present(w, h);
+                overlay();
+                SDL_GL_SwapWindow(win);
+            }
         }
         if (stats) {
             uint64_t now = SDL_GetTicksNS();

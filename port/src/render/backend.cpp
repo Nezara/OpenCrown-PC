@@ -1,6 +1,7 @@
-// GL replay of captured draws. Each draw is decoded on the CPU into one canonical vertex format (pos, colour, uv),
-// expanded to plain triangles / lines, and drawn with one program whose uniforms stand in for the game's shader
-// permutations. Targets are kept "top row first" (clip y negated) so game UVs sample render targets unchanged.
+// Replay of captured draws. Each draw is decoded on the CPU into one canonical vertex format (pos, colour, uv),
+// expanded to plain triangles / lines, and handed to the Device (device.h: OpenGL or SDL_gpu) as one Draw record for
+// one program whose uniforms stand in for the game's shader permutations. Targets are kept "top row first" so game
+// UVs sample render targets unchanged.
 #include "backend.h"
 
 #include <windows.h>
@@ -17,86 +18,13 @@
 
 #include "formats/ftx.h"
 #include "formats/gnm_detile.h"
-#include "gl.h"
+#include "device.h"
 #include "png.h"
 #include "prompts.h"
 #include "texwatch.h"
 
-using namespace dcp::gl;
-
 namespace dcp::render {
 namespace {
-
-struct Vtx { float pos[4]; float col[4]; float uv[2]; float muv[2]; };
-
-const char* kVs = R"(#version 330 core
-layout(location=0) in vec4 aPos; layout(location=1) in vec4 aCol; layout(location=2) in vec2 aUv; layout(location=3) in vec2 aMuv;
-uniform mat4 uMat; uniform int uRaw; out vec2 vUv; out vec2 vMuv; out vec4 vCol;
-void main(){ vec4 p = uRaw == 1 ? aPos : uMat * aPos; p.y = -p.y; gl_Position = p; vUv = aUv; vMuv = aMuv; vCol = aCol; })";
-// Re-authored from the game's own PS binaries (GCN disassembly, Work/tools/gcn.py; see README "Pixel shaders").
-// uFlags: 1 texture slot 0 (rgba multiply), 16 texture rgb only (alpha = vertex alpha: PS50/53/55), 32 mask texture
-// (second texture at vMuv, rgba multiply), 4 constant colour only (PS51), 64 texture rgb with alpha 1 (PS58),
-// sprite ops in the game's order: 256 factor (desaturate), 128 colour matrix, 512 gradient (2 tone-curve stages), 2 tint.
-const char* kFs = R"(#version 330 core
-in vec2 vUv; in vec2 vMuv; in vec4 vCol; uniform sampler2D uTex; uniform sampler2D uMask; uniform int uFlags;
-uniform vec4 uTint; uniform vec4 uConst; uniform vec4 uCm[3]; uniform float uFactor; uniform vec4 uGrad[16];
-out vec4 o;
-float g(int i) { return uGrad[i >> 2][i & 3]; }
-// GCN computes clamp(x * rcp(s) - lo * rcp(s)); a NaN clamps to 0. With s = 0 (unused stages carry 0 scales) that is
-// 0 unless x and lo have opposite signs, so an unused stage stays an exact no-op instead of producing NaN.
-float ramp(float x, float lo, float s) {
-  if (s != 0.0) return clamp((x - lo) / s, 0.0, 1.0);
-  return (x > 0.0 && lo < 0.0) ? 1.0 : 0.0;
-}
-vec3 curve(vec3 x, int b) {  // one 32-float stage: lerp(x, base + w1*t1 + w2*t2, mix * amount)
-  vec3 r;
-  for (int c = 0; c < 3; ++c) {
-    float t1 = ramp(x[c], g(b + c), g(b + 8 + c)), t2 = ramp(x[c], g(b + 4 + c), g(b + 12 + c));
-    float k = g(b + 16 + c) + g(b + 20 + c) * t1 + g(b + 24 + c) * t2;
-    r[c] = x[c] + (k - x[c]) * (g(b + 28 + c) * g(b + 31));
-  }
-  return r;
-}
-void main(){
-  if ((uFlags & 4) != 0) { o = uConst; return; }
-  if ((uFlags & 64) != 0) { o = vec4(texture(uTex, vUv).rgb, 1.0); return; }
-  vec4 c = vCol;
-  if ((uFlags & 1) != 0) c *= texture(uTex, vUv);
-  if ((uFlags & 16) != 0) c.rgb *= texture(uTex, vUv).rgb;
-  if ((uFlags & 32) != 0) c *= texture(uMask, vMuv);
-  if ((uFlags & 256) != 0) c.rgb += uFactor * (vec3((c.r + c.g + c.b) * (1.0 / 3.0)) - c.rgb);
-  if ((uFlags & 128) != 0) c.rgb = vec3(dot(uCm[0].xyz, c.rgb) * uCm[0].w, dot(uCm[1].xyz, c.rgb) * uCm[1].w,
-                                        dot(uCm[2].xyz, c.rgb) * uCm[2].w);
-  if ((uFlags & 512) != 0) c.rgb = curve(curve(c.rgb, 0), 32);
-  if ((uFlags & 2) != 0) c.rgb += (uTint.rgb - c.rgb) * uTint.a;
-  o = c;
-})";
-
-GLuint compile(GLenum type, const char* src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024];
-        glGetShaderInfoLog(s, sizeof log, nullptr, log);
-        std::fprintf(stderr, "render: shader: %s\n", log);
-        return 0;
-    }
-    return s;
-}
-
-GLenum gl_factor(uint32_t f) {
-    static const GLenum t[] = {GL_ZERO, GL_ONE, GL_SRC_COLOR, GL_ONE_MINUS_SRC_COLOR, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-                               GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_DST_COLOR, GL_ONE_MINUS_DST_COLOR,
-                               GL_SRC_ALPHA_SATURATE};
-    return f < 11 ? t[f] : GL_ONE;
-}
-GLenum gl_comb(uint32_t c) {
-    static const GLenum t[] = {GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_MIN, GL_MAX, GL_FUNC_REVERSE_SUBTRACT};
-    return c < 5 ? t[c] : GL_FUNC_ADD;
-}
 
 float half_to_float(uint16_t h) {
     uint32_t s = h >> 15, e = h >> 10 & 0x1f, m = h & 0x3ff;
@@ -141,7 +69,7 @@ int fetch(const Stream& s, uint32_t i, float out[4]) {
     }
 }
 
-struct Target { GLuint tex = 0, fbo = 0; int w = 0, h = 0; };
+struct Target { TexId tex = 0; int w = 0, h = 0; };
 
 uint64_t fnv(const void* p, size_t n, uint64_t h = 1469598103934665603ull) {
     for (size_t i = 0; i < n; ++i) h = (h ^ static_cast<const uint8_t*>(p)[i]) * 1099511628211ull;
@@ -164,11 +92,10 @@ bool readable(uint64_t a, uint64_t n) {
 }  // namespace
 
 struct Backend::Impl {
-    GLuint prog = 0, vao = 0, vbo = 0, white = 0;
-    GLint u_mat = -1, u_raw = -1, u_flags = -1, u_tint = -1, u_const = -1, u_tex = -1, u_mask = -1, u_cm = -1, u_factor = -1, u_grad = -1;
+    std::unique_ptr<Device> dev;
     std::unordered_map<uint64_t, Target> targets;  // by colour target base address
     // watched: pages write-protected by texwatch, stale when written_since(seq); else stale when the first 512 B change.
-    struct Tex { GLuint id = 0; uint64_t last = 0, seq = 0, head = 0; bool watched = false; };
+    struct Tex { TexId id = 0; uint64_t last = 0, seq = 0, head = 0; bool watched = false; };
     std::unordered_map<uint64_t, Tex> texs;        // by T# + content hash
     uint64_t reuploads = 0;
     Prompts prompts;                               // button-prompt glyph swap (prompts.h)
@@ -185,35 +112,23 @@ struct Backend::Impl {
     bool ab_on_pending = false;  // optional 4th field: only at a frame that has a draw with this PS index
     std::string ab_path;
     // Game matrices are row-major with the translation in elements 3/7/11 (seen in captured VS cb0: x/640 - 1/960);
-    // GL wants column-major, so upload transposed. DCP_RENDER_NO_TRANSPOSE restores the old behaviour for checks.
+    // the shaders want column-major, so upload transposed. DCP_RENDER_NO_TRANSPOSE restores the old behaviour for checks.
     bool transpose = std::getenv("DCP_RENDER_NO_TRANSPOSE") == nullptr;
     long dump_flip = std::getenv("DCP_RENDER_DUMP") ? std::atol(std::getenv("DCP_RENDER_DUMP")) : -1;
     uint32_t sprite_ps_perm[64];                   // PS pool index -> sprite permutation bits (0xff = not a sprite PS)
 
     Target& target(uint64_t base, int w, int h) {
         Target& t = targets[base];
-        if (!t.fbo) {
+        if (!t.tex) {
             t.w = w, t.h = h;
-            glGenTextures(1, &t.tex);
-            glBindTexture(GL_TEXTURE_2D, t.tex);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glGenFramebuffers(1, &t.fbo);
-            glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.tex, 0);
-            glDisable(GL_SCISSOR_TEST);
-            glClearColor(0, 0, 0, 0);
-            glClear(GL_COLOR_BUFFER_BIT);
+            t.tex = dev->create_target(w, h);
             std::fprintf(stderr, "render: target %llx %dx%d\n", (unsigned long long)base, w, h);
         }
         return t;
     }
 
-    // GL texture for a pixel-stage T#: a render target we own, or game texture memory (detiled, uploaded once).
-    GLuint texture(const uint32_t t[8]) {
+    // Device texture for a pixel-stage T#: a render target we own, or game texture memory (detiled, uploaded once).
+    TexId texture(const uint32_t t[8]) {
         formats::GnfTexture g;
         std::memcpy(g.t.data(), t, 32);
         uint64_t base = (uint64_t(t[0]) | uint64_t(t[1] & 0xff) << 32) << 8;
@@ -261,31 +176,29 @@ struct Backend::Impl {
                              (unsigned long long)base, s.width, s.height, (unsigned long long)reuploads,
                              x.watched ? "write-protect" : "head hash");
         }
-        GLenum fmt = 0;
+        TexFormat fmt;
         switch (g.data_format()) {
-        case 41: fmt = GL_COMPRESSED_RGBA_BPTC_UNORM; break;
-        case 35: fmt = GL_COMPRESSED_RGBA_S3TC_DXT1_EXT; break;
-        case 36: fmt = GL_COMPRESSED_RGBA_S3TC_DXT3_EXT; break;
-        case 37: fmt = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT; break;
-        case 10: fmt = GL_RGBA8; break;
-        default: break;
-        }
-        if (!fmt) {
+        case 41: fmt = TexFormat::BC7; break;
+        case 35: fmt = TexFormat::BC1; break;
+        case 36: fmt = TexFormat::BC2; break;
+        case 37: fmt = TexFormat::BC3; break;
+        case 10: fmt = TexFormat::RGBA8; break;
+        default:
             if (bad_tex.insert(key).second)
                 std::fprintf(stderr, "render: texture format %u (%s) not handled\n", g.data_format(), info.name ? info.name : "?");
             return 0;
         }
         std::vector<uint8_t> lin = formats::gnm_detile({reinterpret_cast<const uint8_t*>(base), size_t(tiled)}, s);
         if (!early) watched = texwatch::protect(base, tiled, &seq);  // head-hashed texture: try write tracking again
-        GLuint id;
-        if (it != texs.end()) id = it->second.id;  // re-upload in place
-        else glGenTextures(1, &id);
-        glBindTexture(GL_TEXTURE_2D, id);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        if (info.compressed)
-            glCompressedTexImage2D(GL_TEXTURE_2D, 0, fmt, s.width, s.height, 0, GLsizei(lin.size()), lin.data());
-        else
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, s.width, s.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, lin.data());
+        TexId id = dev->upload(it != texs.end() ? it->second.id : 0,  // re-upload in place
+                               fmt, int(s.width), int(s.height), lin.data(), lin.size(), false);
+        if (!id) {
+            if (bad_tex.insert(key).second)
+                std::fprintf(stderr, "render: texture %llx fmt %u %ux%u: %s upload failed\n", (unsigned long long)base,
+                             g.data_format(), s.width, s.height, dev->name());
+            if (it != texs.end()) dev->destroy(it->second.id), texs.erase(it);
+            return 0;
+        }
         texs[key] = {id, frame_no, seq, head, watched};
         if (prompts.is_atlas(base, s.width, s.height, lin.data(), lin.size())) prompts.atlas_ids.insert(id);
         else prompts.atlas_ids.erase(id);
@@ -294,8 +207,11 @@ struct Backend::Impl {
             static bool done = false;
             if (!done) {
                 done = true;
-                std::vector<uint8_t> rgba(size_t(s.width) * s.height * 4), rgb(size_t(s.width) * s.height * 3);
-                glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+                std::vector<uint8_t> rgba, rgb(size_t(s.width) * s.height * 3);
+                if (!dev->read_texture(id, int(s.width), int(s.height), &rgba)) {
+                    std::fprintf(stderr, "render: texdump needs the OpenGL renderer (--renderer gl)\n");
+                    return id;
+                }
                 for (size_t i = 0; i < size_t(s.width) * s.height; ++i)
                     for (int c = 0; c < 3; ++c) rgb[i * 3 + c] = uint8_t(rgba[i * 4 + c] * rgba[i * 4 + 3] / 255);
                 const char* comma = std::strchr(e, ',');
@@ -308,27 +224,27 @@ struct Backend::Impl {
         return id;
     }
 
-    void sampler(const uint32_t s[4]) {
-        static const GLint wrap[] = {GL_REPEAT, GL_MIRRORED_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT,
-                                     GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE, GL_CLAMP_TO_EDGE};
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap[s[0] & 7]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap[s[0] >> 3 & 7]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (s[2] >> 20 & 3) ? GL_LINEAR : GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (s[2] >> 22 & 3) ? GL_LINEAR : GL_NEAREST);
+    static Sampler sampler(const uint32_t s[4]) {
+        Sampler r;
+        r.wrap_u = uint8_t(s[0] & 7), r.wrap_v = uint8_t(s[0] >> 3 & 7);
+        r.mag_linear = (s[2] >> 20 & 3) != 0, r.min_linear = (s[2] >> 22 & 3) != 0;
+        return r;
     }
 
-    void blend(uint32_t w) {
-        if (!(w >> 30 & 1)) { glDisable(GL_BLEND); return; }
-        glEnable(GL_BLEND);
-        uint32_t cs = w & 0x1f, cc = w >> 5 & 7, cd = w >> 8 & 0x1f;
-        uint32_t as = cs, ac = cc, ad = cd;
-        if (w >> 29 & 1) as = w >> 16 & 0x1f, ac = w >> 21 & 7, ad = w >> 24 & 0x1f;
-        glBlendEquationSeparate(gl_comb(cc), gl_comb(ac));
-        glBlendFuncSeparate(gl_factor(cs), gl_factor(cd), gl_factor(as), gl_factor(ad));
+    static Blend blend(uint32_t w) {
+        Blend b;
+        if (!(w >> 30 & 1)) return b;
+        b.on = true;
+        b.cs = uint8_t(w & 0x1f), b.cc = uint8_t(w >> 5 & 7), b.cd = uint8_t(w >> 8 & 0x1f);
+        b.as = b.cs, b.ac = b.cc, b.ad = b.cd;
+        if (w >> 29 & 1) b.as = uint8_t(w >> 16 & 0x1f), b.ac = uint8_t(w >> 21 & 7), b.ad = uint8_t(w >> 24 & 0x1f);
+        return b;
     }
 
-    // Builds the canonical vertex list for a draw; returns the GL primitive (GL_TRIANGLES / GL_LINES / GL_POINTS).
-    GLenum assemble(const DrawRec& r, bool* raw) {
+    // Builds the canonical vertex list for a draw and its primitive; false = nothing to draw. Point lists are dropped:
+    // the GL replay returned GL_POINTS (= 0) here and its "!mode" check skipped them, so they never drew.
+    bool assemble(const DrawRec& r, bool* raw, Prim* prim) {
+        *prim = Prim::Triangles;
         verts.clear();
         *raw = false;
         // Streams: a group of position streams (float), then a group of RGBA8 colour streams, then uv. Sprite morph
@@ -394,15 +310,18 @@ struct Backend::Impl {
             *raw = true;
             const float q[6][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}};
             for (auto& c : q) verts.push_back({{c[0], c[1], 0, 1}, {1, 1, 1, 1}, {(c[0] + 1) / 2, (1 - c[1]) / 2}, {0, 0}});
-            return GL_TRIANGLES;
+            return true;
         }
         std::vector<Vtx> src;
         src.reserve(seq.size());
         for (uint32_t i : seq) src.push_back(make(i));
         switch (r.prim) {
-        case 1: verts = src; return GL_POINTS;
-        case 2: verts = src; return GL_LINES;
-        case 3: for (size_t i = 1; i < src.size(); ++i) verts.push_back(src[i - 1]), verts.push_back(src[i]); return GL_LINES;
+        case 1: return false;
+        case 2: verts = src; *prim = Prim::Lines; return true;
+        case 3:
+            for (size_t i = 1; i < src.size(); ++i) verts.push_back(src[i - 1]), verts.push_back(src[i]);
+            *prim = Prim::Lines;
+            return true;
         case 4: verts = src; break;
         case 5: for (size_t i = 2; i < src.size(); ++i) verts.push_back(src[0]), verts.push_back(src[i - 1]), verts.push_back(src[i]); break;
         case 6:
@@ -438,9 +357,9 @@ struct Backend::Impl {
             for (size_t i = 0; i + 3 < src.size(); i += 4)
                 for (int k : {0, 1, 2, 0, 2, 3}) verts.push_back(src[i + k]);
             break;
-        default: return 0;
+        default: return false;
         }
-        return GL_TRIANGLES;
+        return true;
     }
 
     void dump(const Frame& f) {
@@ -559,8 +478,8 @@ struct Backend::Impl {
     void draw_one(const DrawRec& r) {
         ++draw_seq;
         bool raw = false;
-        GLenum mode = assemble(r, &raw);
-        if (!mode || verts.empty()) return;
+        Prim prim;
+        if (!assemble(r, &raw, &prim) || verts.empty()) return;
         // VS20 (group composite) / VS22 (backdrop copy): position passes through as clip xy (z 0, w 1), no matrix; the
         // VS cb0 still bound is stale state from the previous sprite part.
         if ((r.vs == 20 || r.vs == 22) && !raw) {
@@ -581,18 +500,15 @@ struct Backend::Impl {
         if (!r.rt) return;
         if (pick_now) pick(r, raw);
         Target& t = target(r.rt, int(r.rt_w), int(r.rt_h));
-        glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-        glViewport(0, 0, t.w, t.h);
-        if (r.scissor_on && r.scissor[2] > r.scissor[0] && r.scissor[3] > r.scissor[1]) {
-            glEnable(GL_SCISSOR_TEST);
-            glScissor(r.scissor[0], r.scissor[1], r.scissor[2] - r.scissor[0], r.scissor[3] - r.scissor[1]);
-        } else {
-            glDisable(GL_SCISSOR_TEST);
-        }
-        blend(r.blend);
-        GLuint tex = (r.tex[0][0] || r.tex[0][1]) ? texture(r.tex[0]) : 0;
+        Draw& d = cur;
+        d.target = t.tex, d.tw = t.w, d.th = t.h;
+        d.prim = prim;
+        d.scissor = r.scissor_on && r.scissor[2] > r.scissor[0] && r.scissor[3] > r.scissor[1];
+        if (d.scissor) d.sc[0] = r.scissor[0], d.sc[1] = r.scissor[1], d.sc[2] = r.scissor[2] - r.scissor[0], d.sc[3] = r.scissor[3] - r.scissor[1];
+        d.blend = blend(r.blend);
+        TexId tex = (r.tex[0][0] || r.tex[0][1]) ? texture(r.tex[0]) : 0;
         int mask_uv = 0;
-        GLuint tex1 = 0;
+        TexId tex1 = 0;
         if ((r.cls == Cls::Sprite || r.cls == Cls::X1 || r.cls == Cls::X2) && (r.tex[1][0] || r.tex[1][1])) tex1 = texture(r.tex[1]);
         int fl = flags_for(r, tex != 0, tex1 != 0, &mask_uv) & ~off_mask;
         if (logged_prog.insert(uint64_t(r.cls) << 56 | uint64_t(r.vs & 0xff) << 48 | uint64_t(r.ps & 0xff) << 40 | r.blend).second)
@@ -614,12 +530,10 @@ struct Backend::Impl {
                 else v.muv[0] = u, v.muv[1] = w;
             }
         }
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, (fl & 32) ? tex1 : white);
-        if (fl & 32) sampler(r.samp[1]);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tex ? tex : white);
-        if (tex) sampler(r.samp[0]);
+        d.tex[1] = (fl & 32) ? tex1 : 0, d.samp_set[1] = (fl & 32) != 0;
+        if (d.samp_set[1]) d.samp[1] = sampler(r.samp[1]);
+        d.tex[0] = tex, d.samp_set[0] = tex != 0;
+        if (tex) d.samp[0] = sampler(r.samp[0]);
         if (tex && (r.samp[0][0] >> 15 & 1)) {  // S# force_unnormalized (X1 glyph quads: uv in texels, S# 00008000 ...)
             formats::GnfTexture g;
             std::memcpy(g.t.data(), r.tex[0], 32);
@@ -629,31 +543,24 @@ struct Backend::Impl {
         }
         float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         if (r.vcb[0].size() >= 64) std::memcpy(m, r.vcb[0].data(), 64);
-        glUniformMatrix4fv(u_mat, 1, transpose, m);
-        glUniform1i(u_raw, raw ? 1 : 0);
-        glUniform1i(u_flags, fl);
-        float tint[4] = {1, 1, 1, 1}, cst[4] = {0, 0, 0, 0};
-        if (r.pcb[1].size() >= 16) std::memcpy(tint, r.pcb[1].data(), 16);
-        if (r.pcb[0].size() >= 16) std::memcpy(cst, r.pcb[0].data(), 16);
-        glUniform4fv(u_tint, 1, tint);
-        glUniform4fv(u_const, 1, cst);
-        if (fl & 128) {  // PS cb2: 3 rows (m0 m1 m2 scale), FUN_005a6fb0 slot 2
-            float cm[12] = {1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1};
-            if (r.pcb[2].size() >= 48) std::memcpy(cm, r.pcb[2].data(), 48);
-            glUniform4fv(u_cm, 3, cm);
+        std::memcpy(d.mat, m, sizeof m);
+        d.transpose = transpose;
+        d.raw = raw;
+        static const float kTint[4] = {1, 1, 1, 1}, kCm[12] = {1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1};
+        std::memcpy(d.tint, r.pcb[1].size() >= 16 ? r.pcb[1].data() : (const void*)kTint, 16);
+        std::memset(d.cst, 0, 16);
+        if (r.pcb[0].size() >= 16) std::memcpy(d.cst, r.pcb[0].data(), 16);
+        // PS cb2: 3 rows (m0 m1 m2 scale), FUN_005a6fb0 slot 2
+        std::memcpy(d.cm, (fl & 128) && r.pcb[2].size() >= 48 ? r.pcb[2].data() : (const void*)kCm, 48);
+        d.factor = 0;  // PS cb3: factor (byte +0x232 / 255)
+        if ((fl & 256) && r.pcb[3].size() >= 4) std::memcpy(&d.factor, r.pcb[3].data(), 4);
+        std::memset(d.grad, 0, sizeof d.grad);  // PS cb4: 0x100 B, two 32-float tone-curve stages
+        if (fl & 512) {
+            if (r.pcb[4].size() >= 256) std::memcpy(d.grad, r.pcb[4].data(), 256);
+            else fl &= ~512;
         }
-        if (fl & 256) {  // PS cb3: factor (byte +0x232 / 255)
-            float f = 0;
-            if (r.pcb[3].size() >= 4) std::memcpy(&f, r.pcb[3].data(), 4);
-            glUniform1f(u_factor, f);
-        }
-        if (fl & 512) {  // PS cb4: 0x100 B, two 32-float tone-curve stages
-            float gr[64] = {};
-            if (r.pcb[4].size() >= 256) std::memcpy(gr, r.pcb[4].data(), 256);
-            else fl &= ~512, glUniform1i(u_flags, fl);
-            glUniform4fv(u_grad, 16, gr);
-        }
-        if (prompt_overlay.seq == draw_seq && mode == GL_TRIANGLES && r.cls == Cls::Sprite && prompts.kbm && !prompts.atlas_ids.count(tex)) {
+        d.flags = fl;
+        if (prompt_overlay.seq == draw_seq && prim == Prim::Triangles && r.cls == Cls::Sprite && prompts.kbm && !prompts.atlas_ids.count(tex)) {
             // Localised lettering ("TOUCHPAD", "OPTIONS") drawn from another atlas right over a button we replaced.
             float b[4];
             screen_bbox(r, raw, m, b);
@@ -661,10 +568,11 @@ struct Backend::Impl {
             float cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2, ow = o.x1 - o.x0, oh = o.y1 - o.y0;
             if (cx > o.x0 && cx < o.x1 && cy > o.y0 && cy < o.y1 && b[2] - b[0] <= ow * 1.3f && b[3] - b[1] <= oh * 1.3f) return;
         }
-        if (mode == GL_TRIANGLES && tex && !prompts.atlas_ids.empty() && prompts.atlas_ids.count(tex) && !swap_prompt(r, raw, m, &fl)) return;
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(verts.size() * sizeof(Vtx)), verts.data(), GL_STREAM_DRAW);
-        glDrawArrays(mode, 0, GLsizei(verts.size()));
+        if (prim == Prim::Triangles && tex && !prompts.atlas_ids.empty() && prompts.atlas_ids.count(tex) && !swap_prompt(r, raw, m)) return;
+        d.v = verts.data(), d.n = verts.size();
+        dev->draw(d);
     }
+    Draw cur;
 
     // A draw sampling the button atlas (prompts.h, notes/map/button_prompts.md). In KB/M mode a button's parts become
     // one glyph: a ball (button base) is drawn as the glyph and the symbol drawn over it is dropped; a lone symbol
@@ -686,7 +594,7 @@ struct Backend::Impl {
     }
     std::vector<PromptMark> prompt_marks;  // this frame's balls / plates (screen px)
     std::set<std::string> prompt_logged;
-    bool swap_prompt(const DrawRec& r, bool raw, const float* m, int* fl) {
+    bool swap_prompt(const DrawRec& r, bool raw, const float* m) {
         float u0 = 1e30f, v0 = 1e30f, u1 = -1e30f, v1 = -1e30f, x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f, al = 0;
         for (const Vtx& v : verts) {
             u0 = std::min(u0, v.uv[0]), u1 = std::max(u1, v.uv[0]), v0 = std::min(v0, v.uv[1]), v1 = std::max(v1, v.uv[1]);
@@ -736,7 +644,7 @@ struct Backend::Impl {
         case PromptCell::Hide: return false;
         }
         float aspect = 1;
-        GLuint g = prompts.glyph(btn, &aspect);
+        TexId g = prompts.glyph(btn, &aspect);
         if (!g) return true;  // unbound or no font: keep the pad glyph
         const float gw = gh * aspect;
         const float qx0 = (gx - gw / 2) / r.rt_w * 2 - 1, qx1 = (gx + gw / 2) / r.rt_w * 2 - 1;
@@ -744,13 +652,10 @@ struct Backend::Impl {
         const float q[6][4] = {{qx0, qy0, 0, 0}, {qx1, qy0, 1, 0}, {qx1, qy1, 1, 1}, {qx0, qy0, 0, 0}, {qx1, qy1, 1, 1}, {qx0, qy1, 0, 1}};
         verts.clear();
         for (auto& k : q) verts.push_back({{k[0], k[1], 0, 1}, {1, 1, 1, al}, {k[2], k[3]}, {0, 0}});
-        *fl = 1;  // texture x vertex colour only (game alpha kept for fades)
-        glUniform1i(u_flags, *fl);
-        glUniform1i(u_raw, 1);
-        const float no_tint[4] = {0, 0, 0, 0};
-        glUniform4fv(u_tint, 1, no_tint);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, g);
+        cur.flags = 1;  // texture x vertex colour only (game alpha kept for fades)
+        cur.raw = true;
+        std::memset(cur.tint, 0, sizeof cur.tint);
+        cur.tex[0] = g, cur.samp_set[0] = false;  // the glyph's own linear / clamp sampling
         return true;
     }
 };
@@ -764,48 +669,19 @@ void Backend::set_prompt_kbm(bool kbm) {
 void Backend::set_prompt_bindings(const std::map<std::string, std::string>& b) { m_->prompts.set_bindings(b); }
 Backend::~Backend() = default;
 
-bool Backend::init() {
+bool Backend::init() { return init(make_gl_device()); }
+
+bool Backend::init(std::unique_ptr<Device> dev) {
     Impl& m = *m_;
-    GLuint vs = compile(GL_VERTEX_SHADER, kVs), fs = compile(GL_FRAGMENT_SHADER, kFs);
-    if (!vs || !fs) return false;
-    m.prog = glCreateProgram();
-    glAttachShader(m.prog, vs);
-    glAttachShader(m.prog, fs);
-    glLinkProgram(m.prog);
-    GLint ok = 0;
-    glGetProgramiv(m.prog, GL_LINK_STATUS, &ok);
-    if (!ok) { std::fprintf(stderr, "render: program link failed\n"); return false; }
-    m.u_mat = glGetUniformLocation(m.prog, "uMat");
-    m.u_raw = glGetUniformLocation(m.prog, "uRaw");
-    m.u_flags = glGetUniformLocation(m.prog, "uFlags");
-    m.u_tint = glGetUniformLocation(m.prog, "uTint");
-    m.u_const = glGetUniformLocation(m.prog, "uConst");
-    m.u_tex = glGetUniformLocation(m.prog, "uTex");
-    m.u_mask = glGetUniformLocation(m.prog, "uMask");
-    m.u_cm = glGetUniformLocation(m.prog, "uCm");
-    m.u_factor = glGetUniformLocation(m.prog, "uFactor");
-    m.u_grad = glGetUniformLocation(m.prog, "uGrad");
-    glGenVertexArrays(1, &m.vao);
-    glGenBuffers(1, &m.vbo);
-    glBindVertexArray(m.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
-    glVertexAttribPointer(0, 4, GL_FLOAT, 0, sizeof(Vtx), (void*)offsetof(Vtx, pos));
-    glVertexAttribPointer(1, 4, GL_FLOAT, 0, sizeof(Vtx), (void*)offsetof(Vtx, col));
-    glVertexAttribPointer(2, 2, GL_FLOAT, 0, sizeof(Vtx), (void*)offsetof(Vtx, uv));
-    glVertexAttribPointer(3, 2, GL_FLOAT, 0, sizeof(Vtx), (void*)offsetof(Vtx, muv));
-    for (int i = 0; i < 4; ++i) glEnableVertexAttribArray(i);
-    uint8_t px[4] = {255, 255, 255, 255};
-    glGenTextures(1, &m.white);
-    glBindTexture(GL_TEXTURE_2D, m.white);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    if (!dev || !dev->init()) return false;
+    m.dev = std::move(dev);
+    m.prompts.dev = m.dev.get();
     std::memset(m.sprite_ps_perm, 0xff, sizeof m.sprite_ps_perm);
     for (uint32_t perm = 0; perm < 48; ++perm) {
         uint32_t ps = sprite_ps_table(perm);
         if (ps < 64 && m.sprite_ps_perm[ps] == 0xffffffffu) m.sprite_ps_perm[ps] = perm;
     }
-    return glGetError() == 0;
+    return true;
 }
 
 void Backend::draw(const Frame& f) {
@@ -835,14 +711,9 @@ void Backend::draw(const Frame& f) {
     for (const auto& d : f.draws) ab_hit = ab_hit || d->ps == m.ab_ps;
     if (m.ab_vblank >= 0 && f.vblank >= uint64_t(m.ab_vblank) && ab_hit) {
         m.off_mask = m.ab_mask;
-        glUseProgram(m.prog);
-        glUniform1i(m.u_tex, 0);
-        glUniform1i(m.u_mask, 1);
-        glBindVertexArray(m.vao);
-        glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
-        glColorMask(1, 1, 1, 1);
+        m.dev->begin_frame();
         for (const auto& d : f.draws) m.draw_one(*d);
-        glDisable(GL_SCISSOR_TEST);
+        m.dev->end_frame();
         uint64_t keep = m.shown;
         if (f.display && m.targets.count(f.display)) m.shown = f.display;
         int w, h;
@@ -857,19 +728,14 @@ void Backend::draw(const Frame& f) {
         m.ab_vblank = -2;
         m.ab_on_pending = true;
     }
-    glUseProgram(m.prog);
-    glUniform1i(m.u_tex, 0);
-    glUniform1i(m.u_mask, 1);
-    glBindVertexArray(m.vao);
-    glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
-    glColorMask(1, 1, 1, 1);
+    m.dev->begin_frame();
     std::map<uint64_t, int> per_rt;
     for (const auto& d : f.draws) {
         m.draw_one(*d);
         ++m.pick_index;
         ++per_rt[d->rt];
     }
-    glDisable(GL_SCISSOR_TEST);
+    m.dev->end_frame();
     if (f.display && m.targets.count(f.display)) m.shown = f.display;
     else {
         int best = -1;  // GUESS until the final copy to the display buffer is understood: busiest target
@@ -883,7 +749,7 @@ void Backend::draw(const Frame& f) {
         if (w) write_png(on, w, h, rgb);
     }
     for (auto it = m.texs.begin(); it != m.texs.end();) {  // drop textures unused for ~10 s
-        if (m.frame_no - it->second.last > 600) glDeleteTextures(1, &it->second.id), it = m.texs.erase(it);
+        if (m.frame_no - it->second.last > 600) m.dev->destroy(it->second.id), it = m.texs.erase(it);
         else ++it;
     }
 }
@@ -894,37 +760,21 @@ unsigned Backend::shown_texture(int* w, int* h) const {
     *w = it->second.w, *h = it->second.h;
     return it->second.tex;
 }
-unsigned Backend::shown_fbo() const {
-    auto it = m_->targets.find(m_->shown);
-    return it == m_->targets.end() ? 0 : it->second.fbo;
-}
-
 std::vector<uint8_t> Backend::read_rgb(int* w, int* h) const {
-    std::vector<uint8_t> rgb;
-    if (!shown_texture(w, h)) { *w = *h = 0; return rgb; }
-    std::vector<uint8_t> px(size_t(*w) * *h * 4);
-    glBindFramebuffer(GL_FRAMEBUFFER, shown_fbo());
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, *w, *h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    std::vector<uint8_t> rgb, px;
+    TexId t = shown_texture(w, h);
+    if (!t || !m_->dev->read_rgba(t, *w, *h, &px)) { *w = *h = 0; return rgb; }
     rgb.resize(size_t(*w) * *h * 3);
     for (size_t i = 0, n = size_t(*w) * *h; i < n; ++i) std::memcpy(&rgb[i * 3], &px[i * 4], 3);
     return rgb;
 }
 
-void Backend::present(int w, int h) const {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDisable(GL_SCISSOR_TEST);
-    glViewport(0, 0, w, h);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    int tw, th;
-    if (!shown_texture(&tw, &th)) return;
-    float s = std::min(float(w) / tw, float(h) / th);
-    int dw = int(tw * s), dh = int(th * s), x = (w - dw) / 2, y = (h - dh) / 2;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown_fbo());
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, tw, th, x, y + dh, x + dw, y, GL_COLOR_BUFFER_BIT, GL_LINEAR);  // row 0 = top
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+void Backend::present(int w, int h, Device::Overlay* overlay) const {
+    int tw = 0, th = 0;
+    TexId tex = shown_texture(&tw, &th);
+    m_->dev->present(tex, tw, th, w, h, overlay);
 }
+
+const char* Backend::device_name() const { return m_->dev ? m_->dev->name() : "none"; }
 
 }  // namespace dcp::render

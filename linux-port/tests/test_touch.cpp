@@ -142,6 +142,60 @@ int main() {
         CHECK(!mouse_is_touch(Tri::On, true, false, true));      // mouse captured for the fairy
         CHECK(mouse_is_touch(Tri::On, false, true, false) && !mouse_is_touch(Tri::Off, true, false, false));
     }
+    // Room chat's tap-then-hold (chat_box.cpp) at 1280x800 (slop 40 * min(1.33, 1.47) = 53 px).
+    {
+        using P = TapHold::Phase;
+        // Tap at (400, 300), second touch at (x2, y2) after `gap` ms, ticked while it is held `hold` ms.
+        auto tap_hold = [](TapHold& g, uint64_t t0, float x2, float y2, uint64_t gap, uint64_t hold, bool armed = true) {
+            g.feed(1, P::Down, 400, 300, 1280, 800, t0, armed);
+            g.feed(1, P::Up, 402, 301, 1280, 800, t0 + 120, armed);
+            g.feed(2, P::Down, x2, y2, 1280, 800, t0 + 120 + gap, armed);
+            bool fired = false;
+            for (uint64_t t = t0 + 120 + gap; t <= t0 + 120 + gap + hold; t += 16) fired |= g.tick(t);
+            return fired;
+        };
+        TapHold g;
+        CHECK(tap_hold(g, 1000, 410, 305, 150, 450));          // tap, then touch and hold nearby: opens
+        CHECK(!g.tick(5000) && g.st == TapHold::St::Idle);     // once only
+        CHECK(!tap_hold(g, 6000, 410, 305, 150, 300));         // held only 300 ms so far
+        g.feed(2, P::Up, 410, 305, 1280, 800, 6000 + 120 + 150 + 300, true);
+        CHECK(!g.tick(7000));                                 // let go before kHoldMs: nothing
+        CHECK(!tap_hold(g, 9000, 600, 305, 150, 450));         // second touch elsewhere
+        g.reset();
+        CHECK(!tap_hold(g, 12000, 410, 305, 400, 450));        // gap too long
+        g.reset();
+        CHECK(!tap_hold(g, 15000, 410, 305, 150, 450, false)); // not armed (not in a room / name box up)
+        // A plain hold (no tap first) never fires.
+        g.reset();
+        g.feed(1, P::Down, 400, 300, 1280, 800, 20000, true);
+        bool fired = false;
+        for (uint64_t t = 20000; t < 21500; t += 16) fired |= g.tick(t);
+        CHECK(!fired);
+        // ... nor does a hold after a slow first touch (not a tap).
+        g.feed(1, P::Up, 400, 300, 1280, 800, 21500, true);
+        g.feed(1, P::Down, 400, 300, 1280, 800, 21600, true);
+        fired = false;
+        for (uint64_t t = 21600; t < 22200; t += 16) fired |= g.tick(t);
+        CHECK(!fired);
+        // A drag during the hold (the fairy pointer) cancels it.
+        g.reset();
+        g.feed(1, P::Down, 400, 300, 1280, 800, 30000, true);
+        g.feed(1, P::Up, 400, 300, 1280, 800, 30100, true);
+        g.feed(1, P::Down, 400, 300, 1280, 800, 30200, true);
+        g.feed(1, P::Move, 520, 300, 1280, 800, 30300, true);
+        fired = false;
+        for (uint64_t t = 30300; t < 31000; t += 16) fired |= g.tick(t);
+        CHECK(!fired);
+        // A second finger during the hold cancels it.
+        g.feed(1, P::Up, 400, 300, 1280, 800, 31000, true);
+        g.feed(1, P::Down, 400, 300, 1280, 800, 32000, true);
+        g.feed(1, P::Up, 400, 300, 1280, 800, 32100, true);
+        g.feed(1, P::Down, 400, 300, 1280, 800, 32200, true);
+        g.feed(7, P::Down, 900, 600, 1280, 800, 32300, true);
+        fired = false;
+        for (uint64_t t = 32300; t < 33000; t += 16) fired |= g.tick(t);
+        CHECK(!fired);
+    }
     std::printf(g_fail ? "test_touch: %d FAILED\n" : "test_touch: all passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

@@ -163,6 +163,15 @@ whoever holds the deployment's `REPORTS_TOKEN` (README "Bug reports", responses 
 the mock only counts them (text in its verbose log). The IP is stored only as HMAC-SHA256 under a random per-deployment
 salt (SQLite `secrets.ip_salt`), for the per-IP limit, and blanked on rows older than 24 h at the next report.
 
+### 4.6 Room chat (ours; the game has no text chat)
+`chat {text, room_id?}` -> `{}`, then event `chat {room_id, member_id, account_id, name, text}` to every member of the
+sender's room **including the sender** (the echo is the client's confirmation; it shows nothing before it). Verified
+connections only (`ERR_UNVERIFIED`; mutes are per account), in a room (`ERR_NO_ROOM`, also when `room_id` is given and
+is not ours). `text`: control characters removed, trimmed, cut to 120 characters (code points); empty -> `ERR_BAD_REQUEST`.
+Rate: own bucket per connection, 5 burst, refilled 1/s -> `ERR_LIMIT`. Never stored, never logged, and **never held**
+for a seat in grace (1.1): chat must not push a reconnecting member over the held-event cap; it simply misses those
+lines. Old clients ignore the event (matching2.cpp skips unknown events), so no protocol bump.
+
 ### 4.5 Limits (Worker)
 The public lobby caps every input. All caps sit well above what the game (via `hle/matching2.cpp`), the launcher and
 `port/tests/test_lobby.cpp` send; a tripped limit answers `0x80550c0a` and leaves the socket open (the client only

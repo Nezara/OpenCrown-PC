@@ -16,6 +16,7 @@
 #include <thread>
 
 #include "net/bug_report.h"
+#include "net/chat.h"
 #include "net/friends.h"
 #include "net/identity.h"
 #include "net/json.h"
@@ -98,6 +99,86 @@ static Json iattr(int id, int64_t v) {
     Json o;
     o["id"] = id, o["value"] = v;
     return o;
+}
+
+// Room chat (lobby_protocol.md 4.6): verified members only, echoed to the whole room incl. the sender, cleaned and cut
+// to 120 code points, 5-message burst. Then the client-side helpers of net/chat.h (text clamp, mutes file).
+static void test_chat(const std::string& url) {
+    std::mt19937_64 rnd(std::random_device{}() ^ uint64_t(Clock::now().time_since_epoch().count()));
+    auto secret = [&] {
+        std::string s;
+        char t[17];
+        for (int i = 0; i < 4; ++i) std::snprintf(t, sizeof t, "%016llx", (unsigned long long)rnd()), s += t;
+        return s;
+    };
+    auto hello = [&](TestClient& t, const char* name, uint64_t acc, const std::string& sec) {
+        Json h;
+        h["proto"] = kLobbyProtocol, h["version"] = kGameNetVersion, h["name"] = name, h["account_id"] = u64_str(acc);
+        h["udp_port"] = 40200;
+        if (!sec.empty()) h["secret"] = sec;
+        return t.reply(t.send("hello", h));
+    };
+    auto say = [](TestClient& t, const std::string& text) {
+        Json b;
+        b["text"] = text;
+        return uint32_t(t.reply(t.send("chat", b)).get("err").as_int(-1));
+    };
+    const uint64_t A = rnd() | 1;
+    TestClient ca(url), cb(url), cu(url);
+    hello(ca, "ChatA", A, secret());
+    hello(cb, "ChatB", rnd() | 1, secret());
+    hello(cu, "ChatU", 0, "");
+    CHECK(say(ca, "hi") == 0x80550d0f);  // not in a room
+    CHECK(say(cu, "hi") == 0x80550c08);  // unverified
+    Json cr;
+    cr["world_id"] = 1, cr["max_slot"] = 4, cr["flag_attr"] = 0;
+    cr["int_attrs"] = Json::array(), cr["bin_internal"] = Json::array(), cr["bin_external"] = Json::array();
+    cr["member_bin_internal"] = Json::array();
+    Json room = ca.reply(ca.send("create_room", cr)).get("room");
+    Json jb;
+    jb["room_id"] = room.get("room_id");
+    CHECK(cb.reply(cb.send("join", jb)).get("err").as_int(-1) == 0);
+    CHECK(say(ca, " \x01\n ") == 0x80550c02);
+    CHECK(say(ca, "  hello\x07 there  ") == 0);
+    for (TestClient* t : {&cb, &ca}) {
+        Json e = t->event("chat");
+        CHECK(e.get("text").as_string() == "hello there" && e.get("name").as_string() == "ChatA" &&
+              e.get("account_id").as_u64() == A && e.get("member_id").as_int() == 0x10 &&
+              e.get("room_id").as_string() == room.get("room_id").as_string());
+    }
+    std::string dragons;
+    for (int i = 0; i < 200; ++i) dragons += "\xf0\x9f\x90\x89";
+    CHECK(say(ca, dragons) == 0);
+    CHECK(cb.event("chat").get("text").as_string().size() == 120 * 4);
+    uint32_t e3 = say(ca, "m0"), e4 = say(ca, "m1"), e5 = say(ca, "m2"), e6 = say(ca, "m3");
+    CHECK(e3 == 0 && e4 == 0 && e5 == 0 && e6 == 0x80550c0a);
+    ca.close(), cb.close(), cu.close();
+
+    // net/chat.h helpers.
+    CHECK(chat::clamp_chars("  a\x01" "b\x7f  ", 120) == "ab");
+    CHECK(chat::clamp_chars(dragons, 3) == "\xf0\x9f\x90\x89\xf0\x9f\x90\x89\xf0\x9f\x90\x89");
+    CHECK(chat::code_points("h\xc3\xa9!") == 3);
+    const char* tmp = std::getenv("TMPDIR");
+    const std::string path = std::string(tmp && *tmp ? tmp : "/tmp") + "/dcp_test_chat_mutes_" + std::to_string(getpid()) + ".txt";
+    std::remove(path.c_str());
+    chat::load_mutes(path);
+    chat::set_muted(77, "Pest", true);
+    chat::load_mutes(path);  // read back from the file
+    CHECK(chat::muted(77) && !chat::muted(78) && chat::mutes().size() == 1 && chat::mutes()[0].second == "Pest");
+    chat::set_in_room(true);
+    chat::received(77, "Pest", "spam", false);
+    chat::received(78, "Friend", "hey", false);
+    chat::Line l;
+    CHECK(chat::take(&l) && l.account == 78 && l.text == "hey" && !chat::take(&l));
+    chat::send("  out  ");
+    std::string out;
+    CHECK(chat::next_outgoing(&out) && out == "out");
+    chat::send("dropped");
+    chat::set_in_room(false);  // leaving the room drops the queue
+    CHECK(!chat::next_outgoing(&out));
+    chat::set_muted(77, "Pest", false);
+    CHECK(!chat::muted(77));
+    std::remove(path.c_str());
 }
 
 // Friends (lobby_protocol.md 4.1 / 4.2) between three verified accounts. Ids and secrets are random per run, so reruns
@@ -598,6 +679,7 @@ int main() {
     CHECK(!down.lobby_ok && down.verdict.find("unreachable") != std::string::npos);
 
     test_friends(url);
+    test_chat(url);
     test_bug_report(url);
     test_identity();
     {

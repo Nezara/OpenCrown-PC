@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
+#include "imgui_impl_sdlgpu3.h"
 
 namespace {
 
@@ -35,17 +36,28 @@ int clamp_length(ImGuiInputTextCallbackData* d) {
     return 0;
 }
 
-bool any_input_held() {
+}  // namespace
+
+bool overlay_input_held() {
     int n = 0;
     const bool* keys = SDL_GetKeyboardState(&n);
     for (int i = 0; i < n; ++i)
         if (keys[i]) return true;
-    return SDL_GetMouseState(nullptr, nullptr) != 0;
+    if (SDL_GetMouseState(nullptr, nullptr) != 0) return true;
+    // Gamepad buttons too (Steam Deck: B closes the chat / name box; it must not reach the game while still down).
+    bool held = false;
+    int np = 0;
+    if (SDL_JoystickID* ids = SDL_GetGamepads(&np)) {
+        for (int i = 0; i < np && !held; ++i)
+            if (SDL_Gamepad* g = SDL_GetGamepadFromID(ids[i]))
+                for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT && !held; ++b) held = SDL_GetGamepadButton(g, SDL_GamepadButton(b));
+        SDL_free(ids);
+    }
+    return held;
 }
 
-}  // namespace
-
-bool ImeBox::init(SDL_Window* win, void* gl_context) {
+namespace {
+void setup_imgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -75,14 +87,43 @@ bool ImeBox::init(SDL_Window* win, void* gl_context) {
         fc.SizePixels = 26.0f;
         io.Fonts->AddFontDefault(&fc);
     }
+}
+}  // namespace
+
+bool ImeBox::init(SDL_Window* win, void* gl_context) {
+    setup_imgui();
     ok_ = ImGui_ImplSDL3_InitForOpenGL(win, gl_context) && ImGui_ImplOpenGL3_Init("#version 330");
     if (!ok_) std::fprintf(stderr, "ime: ImGui init failed; name entry keeps the current name\n");
     return ok_;
 }
 
+bool ImeBox::init_gpu(SDL_Window* win, SDL_GPUDevice* dev) {
+    setup_imgui();
+    ImGui_ImplSDLGPU3_InitInfo info;
+    info.Device = dev;
+    info.ColorTargetFormat = SDL_GetGPUSwapchainTextureFormat(dev, win);
+    info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
+    ok_ = ImGui_ImplSDL3_InitForSDLGPU(win) && ImGui_ImplSDLGPU3_Init(&info);
+    gpu_ = ok_;
+    if (!ok_) std::fprintf(stderr, "ime: ImGui init failed; name entry keeps the current name\n");
+    return ok_;
+}
+
+void ImeBox::gpu_prepare(void* cmd) {
+    if (gpu_ && drawn_) Imgui_ImplSDLGPU3_PrepareDrawData(ImGui::GetDrawData(), static_cast<SDL_GPUCommandBuffer*>(cmd));
+}
+
+void ImeBox::gpu_render(void* cmd, void* pass) {
+    if (!gpu_ || !drawn_) return;
+    drawn_ = false;
+    ImGui_ImplSDLGPU3_RenderDrawData(ImGui::GetDrawData(), static_cast<SDL_GPUCommandBuffer*>(cmd),
+                                     static_cast<SDL_GPURenderPass*>(pass));
+}
+
 void ImeBox::shutdown() {
     if (!ok_) return;
-    ImGui_ImplOpenGL3_Shutdown();
+    if (gpu_) ImGui_ImplSDLGPU3_Shutdown();
+    else ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     ok_ = false;
@@ -92,11 +133,12 @@ void ImeBox::handle_event(const SDL_Event& e) {
     if (ok_ && id_) ImGui_ImplSDL3_ProcessEvent(&e);  // only while open: ImGui queues events until its next frame
 }
 
-void ImeBox::frame(SDL_Window* win) {
+bool ImeBox::update(SDL_Window* win) {
+    drawn_ = false;
     if (!ok_) {
         dcp::hle::ImeRequest r;
         if (dcp::hle::ime_pending(&r)) dcp::hle::ime_finish(r.id, nullptr);  // no UI: keep the old name
-        return;
+        return false;
     }
     if (!id_) {
         dcp::hle::ImeRequest r;
@@ -114,22 +156,36 @@ void ImeBox::frame(SDL_Window* win) {
             std::memcpy(buf_, r.text.data(), n);
             buf_[n] = 0;
         } else {
-            if (blocking_ && !any_input_held()) blocking_ = false;
-            return;
+            if (blocking_ && !overlay_input_held()) blocking_ = false;
+            return false;
         }
     } else if (dcp::hle::ImeRequest r; !dcp::hle::ime_pending(&r) || r.id != id_) {
         id_ = 0;  // the game aborted or replaced the dialog
         SDL_StopTextInput(win);
-        return;
+        return false;
     }
+    return true;
+}
 
+void ImeBox::begin_frame(SDL_Window* win) {
     int w = 1, h = 1;
     SDL_GetWindowSize(win, &w, &h);
     ImGuiIO& io = ImGui::GetIO();
     io.FontGlobalScale = std::clamp(float(h) / 1080.0f, 0.45f, 2.0f) * 0.7f;
-    ImGui_ImplOpenGL3_NewFrame();
+    if (gpu_) ImGui_ImplSDLGPU3_NewFrame();
+    else ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
+}
+
+void ImeBox::end_frame() {
+    ImGui::Render();
+    if (gpu_) drawn_ = true;
+    else ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void ImeBox::draw(SDL_Window* win) {
+    ImGuiIO& io = ImGui::GetIO();
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 110));
 
     const float fs = ImGui::GetFontSize();
@@ -155,11 +211,9 @@ void ImeBox::frame(SDL_Window* win) {
         cancel = true;
     if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)) done = true;
     ImGui::End();
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     if (!armed_) {
-        armed_ = !any_input_held();
+        armed_ = !overlay_input_held();
         done = cancel = false;
     }
     if (done || cancel) {

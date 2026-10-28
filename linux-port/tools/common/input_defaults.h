@@ -58,6 +58,9 @@ touch_as_mouse = auto
 # mouse_attacks: mouse buttons press game buttons (Mouse1 = square ...). auto = yes, except on a Steam Deck, where the
 # controller is the main input and clicks (also touches turned into clicks) never attack; keys still work. on / off.
 mouse_attacks = auto
+# chat = open the room text chat (online rooms only; Enter sends, Esc or gamepad B closes). On a touch screen: tap,
+# then touch and hold the same spot.
+chat = Return
 )";
 
 // Per-user settings dir (input.ini, launcher.ini, saves/, logs/): $DCP_USER_DIR if set, else

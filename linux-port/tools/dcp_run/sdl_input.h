@@ -27,8 +27,13 @@ public:
     virtual void handle_event(const SDL_Event& e) = 0;
     virtual void update(SDL_Window* win) = 0;
     virtual bool kbm_active() const = 0;  // DeviceTracker state
+    // touch_as_mouse is in effect: a left press / drag / release is a finger (gamescope's touch emulation).
+    virtual bool left_mouse_is_touch() const = 0;
     virtual void set_blocked(bool b) = 0;  // true: the game reads idle pads (a text box has the keyboard)
 };
+
+// Steam Deck (SteamDeck=1) or a gamescope session (Game Mode): the same test as mouse_attacks = auto.
+bool steam_deck_host();
 
 // Loads bindings from <dir>/input.ini (creates dir and writes the defaults if missing). Returns the pump (owned by
 // the pad shim). wrap_script: keep the scripted pad source underneath (DCP_TOUCH_TEST runs), live input on top.

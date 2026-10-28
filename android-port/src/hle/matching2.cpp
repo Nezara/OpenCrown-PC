@@ -60,6 +60,7 @@
 #include "hle/online.h"
 #include "hle/threads.h"
 #include "net/carrier.h"
+#include "net/chat.h"
 #include "net/lobby_client.h"
 #include "net/rudp.h"
 #include "net/stun.h"
@@ -146,7 +147,7 @@ struct MemberInfo {
 };
 
 enum class Kind { Hello, Worlds, SetUserInfo, CreateJoin, Join, Leave, Search, SetInternal, SetExternal, Endpoint,
-                  Rehello, Resume };
+                  Rehello, Resume, Chat };
 struct Pending {
   Kind kind;
   uint32_t req_id = 0;  // the id the game got back (0 for our own requests)
@@ -503,6 +504,13 @@ void collect_locked(std::vector<Call>& calls) {
         HLE_NOTE("MATCHING2 endpoint %s (lobby has %s:%lld)\n", m.err ? "FAILED" : "ok",
                  m.body.get("ip").as_string().c_str(), (long long)m.body.get("port").as_int());
       }
+      if (p.kind == Kind::Chat) {  // ok = the lobby's echo follows as a "chat" event
+        if (m.err)
+          dcp::net::chat::notice(m.err == int32_t(0x80550c0a) ? "Not sent: you are sending too fast."
+                                 : m.err == int32_t(0x80550c08) ? "Not sent: chat needs a registered online name."
+                                                                 : "Not sent: the lobby refused the message.");
+        continue;
+      }
       if (!p.cb) continue;  // our own request (endpoint, implicit leave)
       auto a = std::make_shared<Arena>();
       uint32_t data = 0;
@@ -612,6 +620,10 @@ void collect_locked(std::vector<Call>& calls) {
         if (oid != id && oid != g_me && id != g_me && port && o.ip_be == ip && o.port_be == port)
           HLE_NOTE("MATCHING2 members 0x%x and 0x%x share one public endpoint %s:%lld\n", oid, id,
                    b.get("ip").as_string().c_str(), (long long)b.get("port").as_int());
+    } else if (m.ev == "chat") {  // ours (lobby_protocol.md 4.6): to the chat overlay, never to the game
+      uint16_t id = uint16_t(b.get("member_id").as_int());
+      dcp::net::chat::received(b.get("account_id").as_u64(), b.get("name").as_string(), b.get("text").as_string(),
+                               id == g_me, (id >> 4) - 1);
     } else if (m.ev == "signal_dead") {
       uint16_t id = uint16_t(b.get("member_id").as_int());
       auto it = g_signals.find(id);
@@ -661,6 +673,15 @@ void collect_locked(std::vector<Call>& calls) {
       issue(Kind::Endpoint, "endpoint", e, 0, 0);
     }
     endpoint_final = port && !waiting && !g_endpoint_inflight;
+  }
+  // Room chat (net/chat.h): what the player typed goes out while we hold a seat and the link is up.
+  const bool chat_ok = g_room && g_hello_ok && !g_lobby_down && !g_link_lost;
+  dcp::net::chat::set_in_room(chat_ok);
+  for (std::string t; chat_ok && dcp::net::chat::next_outgoing(&t);) {
+    Json cm;
+    cm["room_id"] = dcp::net::u64_str(g_room);
+    cm["text"] = t;
+    issue(Kind::Chat, "chat", cm, 0, 0);
   }
   // Signaling Established per peer, once the game can act on it: callback registered, P2P socket bound, member known
   // from the room data, our endpoint at the lobby and the peer's endpoint settled.

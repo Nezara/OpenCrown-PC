@@ -47,6 +47,8 @@ fairy = Mouse3
 fairy_toggle =
 fairy_tap = E
 fairy_speed = 1.0
+# chat = open the room text chat (online rooms only; Enter sends, Esc closes)
+chat = Return
 )";
 
 // Per-user settings dir (input.ini, launcher.ini, saves/, logs/): %DCP_USER_DIR% if set, else

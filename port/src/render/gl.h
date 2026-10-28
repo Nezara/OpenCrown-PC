@@ -37,7 +37,7 @@ enum : GLenum {
     GL_MIN = 0x8007, GL_MAX = 0x8008, GL_SRC_COLOR = 0x0300, GL_ONE_MINUS_SRC_COLOR = 0x0301, GL_ONE_MINUS_DST_COLOR = 0x0307,
     GL_SRC_ALPHA_SATURATE = 0x0308, GL_READ_FRAMEBUFFER = 0x8CA8, GL_DRAW_FRAMEBUFFER = 0x8CA9, GL_REPEAT = 0x2901,
     GL_MIRRORED_REPEAT = 0x8370, GL_BYTE = 0x1400, GL_SHORT = 0x1402, GL_INT = 0x1404, GL_UNSIGNED_INT_ = 0x1405,
-    GL_HALF_FLOAT = 0x140B,
+    GL_HALF_FLOAT = 0x140B, GL_SAMPLE_BUFFERS = 0x80A8, GL_SAMPLES = 0x80A9,
 };
 
 #define DCP_GL_FUNCS(X)                                                                                   \
@@ -97,7 +97,8 @@ enum : GLenum {
     X(void, glDeleteTextures, (GLsizei, const GLuint*))                                                    \
     X(void, glDisableVertexAttribArray, (GLuint))                                                          \
     X(void, glVertexAttrib4f, (GLuint, GLfloat, GLfloat, GLfloat, GLfloat))                                \
-    X(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))
+    X(void, glColorMask, (GLboolean, GLboolean, GLboolean, GLboolean))                                     \
+    X(void, glGetIntegerv, (GLenum, GLint*))
 
 namespace dcp::gl {
 #define DCP_GL_DECL(ret, name, args) extern ret(DCP_GLAPI* name) args;

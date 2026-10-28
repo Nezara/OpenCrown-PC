@@ -66,6 +66,63 @@ inline bool mouse_is_touch(Tri setting, bool gamescope, bool native_touch_seen, 
     return setting == Tri::On || (gamescope && !native_touch_seen);
 }
 
+// Room chat's touch gesture (tools/dcp_run/chat_box.cpp; same rule as OpenCrown Mobile): a tap shorter than kTapMs,
+// the second touch within kGapMs of it on the same spot (kSlop px at a 960x544 window, scaled), held kHoldMs. A plain
+// tap, a hold, a drag (the fairy pointer) or a second finger is never the gesture. The fingers are only watched: they
+// reach the game as usual. Phases: down / move / up (up also for a cancelled touch, with cancel = true).
+struct TapHold {
+    static constexpr uint64_t kTapMs = 300, kGapMs = 350, kHoldMs = 400;
+    static constexpr float kSlop = 40;
+    enum class Phase { Down, Move, Up };
+    enum class St { Idle, Down1, Wait2, Down2 } st = St::Idle;
+    uint64_t t = 0;   // phase start (ms)
+    int64_t finger = 0;
+    float x0 = 0, y0 = 0;
+
+    void reset() { st = St::Idle; }
+    // A finger event at window point (x, y) of a w x h window; armed = the gesture may start (in a room, no text box).
+    void feed(int64_t id, Phase ph, float x, float y, float w, float h, uint64_t now, bool armed, bool cancel = false) {
+        const float slop = kSlop * std::fmin(w / 960.0f, h / 544.0f);
+        const bool near = std::hypot(x - x0, y - y0) <= slop;
+        switch (st) {
+        case St::Idle:
+        case St::Wait2:
+            if (ph != Phase::Down) return;
+            if (!armed) { st = St::Idle; return; }
+            if (st == St::Wait2 && now - t < kGapMs && near) {
+                st = St::Down2;  // tick() fires once it is held long enough
+            } else {
+                st = St::Down1;
+                x0 = x, y0 = y;
+            }
+            finger = id, t = now;
+            return;
+        case St::Down1:
+        case St::Down2:
+            if (id != finger) {
+                if (ph == Phase::Down) st = St::Idle;  // a second finger: not the gesture
+                return;
+            }
+            if (ph == Phase::Move) {
+                if (!near) st = St::Idle;  // a drag
+                return;
+            }
+            if (ph == Phase::Up && !cancel && st == St::Down1 && now - t < kTapMs && near) st = St::Wait2, t = now;
+            else if (ph != Phase::Down) st = St::Idle;
+            return;
+        }
+    }
+    // Call every frame: true once when the second touch has been held kHoldMs (still down, still near).
+    bool tick(uint64_t now) {
+        if (st == St::Wait2 && now - t >= kGapMs) st = St::Idle;
+        if (st == St::Down2 && now - t >= kHoldMs) {
+            st = St::Idle;
+            return true;
+        }
+        return false;
+    }
+};
+
 // Closed loop: virtual finger that moves the game's cursor to (tx, ty). One step per new cursor reading. The step
 // sent last is not in the reading yet (the hook samples the position before the game applies that read's delta), so
 // it counts as "in flight" when the error is taken. The game's gain k (in-game touch sensitivity) is estimated from

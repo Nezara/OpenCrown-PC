@@ -19,6 +19,7 @@
 #include "hle/ctrl.h"
 #include "hle/ime.h"
 #include "hle/touch.h"
+#include "platform/chat_overlay.h"
 #include "platform/text_entry.h"
 #include "platform/touch_controls.h"
 
@@ -170,8 +171,10 @@ struct Input {
   SDL_Gamepad* pad = nullptr;
   TouchControls touch;
   TextEntry entry;              // the game's text-entry dialog while open: takes the input, the game sees none
+  ChatOverlay chat;             // room chat: fading lines, and its own box while typing (game input blocked like entry)
   uint32_t suppress = 0;        // pad bits held over from the dialog: kept from the game until released
   bool entry_was_open = false;
+  uint64_t chat_shown = 0;      // chat version last sent with the chat-only overlay (0: something else was sent)
   bool touch_enabled = false;  // on-screen controls in use (hidden while a gamepad is connected)
   bool touch_shown() const { return touch_enabled && !pad && touch_opacity > 0; }
 
@@ -220,9 +223,9 @@ void publish(SDL_Window* win, Input& in) {
   s.rx = axis(in.held(LOOK_LEFT), in.held(LOOK_RIGHT), ga(SDL_GAMEPAD_AXIS_RIGHTX));
   s.ry = axis(in.held(LOOK_UP), in.held(LOOK_DOWN), ga(SDL_GAMEPAD_AXIS_RIGHTY));
   in.touch.apply(s);
-  // Text entry: the game gets a neutral pad while the dialog is open, and a button that was held then (Start / Enter
-  // pressed to confirm, the finger on Cross) only once it was released.
-  bool entry = in.entry.open();
+  // Text entry / chat: the game gets a neutral pad while the box is open, and a button that was held then (Start /
+  // Enter pressed to confirm, B to close, the finger on Cross) only once it was released.
+  bool entry = in.entry.open() || in.chat.open();
   in.suppress &= s.buttons;
   if (entry || in.entry_was_open) in.suppress |= s.buttons;
   in.entry_was_open = entry;
@@ -247,12 +250,21 @@ void publish(SDL_Window* win, Input& in) {
     }
   }
   hle::touch_set(0, touches);
-  if (entry) {
-    int w = 1, h = 1;
-    SDL_GetWindowSizeInPixels(win, &w, &h);
+  // The overlay is copied on every present: with only chat lines up (the usual case on a pad), send it on change only.
+  int w = 1, h = 1;
+  SDL_GetWindowSizeInPixels(win, &w, &h);
+  const std::vector<gpu::OverlayVertex>& chat = in.chat.geometry(float(w), float(h));
+  if (in.entry.open()) {
     gpu::set_overlay(in.entry.geometry(float(w), float(h)));
-  } else {
-    gpu::set_overlay(in.touch_shown() ? in.touch.geometry() : std::vector<gpu::OverlayVertex>{});
+    in.chat_shown = 0;
+  } else if (in.touch_shown()) {
+    std::vector<gpu::OverlayVertex> v = in.touch.geometry();
+    v.insert(v.end(), chat.begin(), chat.end());
+    gpu::set_overlay(v);
+    in.chat_shown = 0;
+  } else if (in.chat_shown != in.chat.version() + 1) {
+    gpu::set_overlay(chat);
+    in.chat_shown = in.chat.version() + 1;
   }
 }
 
@@ -340,6 +352,7 @@ int run_with_window(const AppOptions& opt, const std::function<void()>& guest) {
   }).detach();
 
   Input in;
+  in.chat.init();
   in.touch_enabled = opt.touch_controls;
   in.touch.set_opacity(touch_opacity);
   auto relayout = [&] {
@@ -354,6 +367,7 @@ int run_with_window(const AppOptions& opt, const std::function<void()>& guest) {
     if (type == SDL_EVENT_FINGER_DOWN) in.touch.down(id, x, y);
     else if (type == SDL_EVENT_FINGER_MOTION) in.touch.move(id, x, y);
     else in.touch.up(id);
+    in.chat.finger(win, id, type, x, y, type == SDL_EVENT_FINGER_DOWN && in.touch.on_picture(id), in.entry.open());
   };
   publish(win, in);
   for (bool running = true; running;) {
@@ -364,12 +378,18 @@ int run_with_window(const AppOptions& opt, const std::function<void()>& guest) {
     if (!SDL_PollEvent(&e)) {
       SDL_DelayNS(4'000'000);
       bool entry_changed = in.entry.sync(win);
-      if (in.pad || entry_changed) publish(win, in);
+      bool chat_changed = in.chat.sync(win);
+      if (in.pad || entry_changed || chat_changed) publish(win, in);
       continue;
     }
     {
       do {
         if (in.entry.event(win, e)) {  // typing / OK / Cancel; releases fall through to the key state below
+          changed = true;
+          continue;
+        }
+        if (in.chat.event(win, e, in.entry.open())) {  // typing / Send / Close; key releases fall through
+          in.touch.clear();
           changed = true;
           continue;
         }
@@ -436,6 +456,7 @@ int run_with_window(const AppOptions& opt, const std::function<void()>& guest) {
       } while (SDL_PollEvent(&e));
     }
     if (in.entry.sync(win)) changed = true;
+    if (in.chat.sync(win)) changed = true;
     if (changed || in.pad) publish(win, in);
   }
   gpu::renderer().save_caches();

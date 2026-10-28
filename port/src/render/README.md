@@ -1,7 +1,7 @@
-# Stage 4 renderer, step 1: capture + GL replay (`src/render`)
+# Stage 4 renderer, step 1: capture + replay (`src/render`)
 
-`dcp_run ... --render | --window | --shot out.png | --shots N=a.png,M=b.png` draws the game with OpenGL 3.3 (SDL3).
-`dcp_viewer` shares `gl.*` and `png.*`.
+`dcp_run ... --render | --window | --shot out.png | --shots N=a.png,M=b.png` draws the game with SDL GPU (Vulkan /
+D3D12) or OpenGL 3.3 (`--renderer`, see "Two renderers"). `dcp_viewer` shares `gl.*` and `png.*` (GL only).
 
 ## How it works
 - **capture.cpp** (linked into `dcp_hle`, game threads) puts 5-byte `jmp` hooks on 19 eboot functions
@@ -14,14 +14,40 @@
   The `sceGnmDrawIndex*` shim snapshots that state, copies the referenced vertex, index and constant bytes into a
   `DrawRec`, and overwrites the draw packet with a marker NOP. Markers are collected in submit order when the DCB is
   submitted. A flip closes the frame.
-- **backend.cpp** (GL thread) replays each frame. Every draw is decoded on the CPU into one vertex format (pos,
-  colour, uv) and expanded to triangles. One re-authored program stands in for the game's shader permutations.
-  - Each colour target address gets its own FBO. Rows are stored top first: clip y is negated.
+- **backend.cpp** (render thread) replays each frame. Every draw is decoded on the CPU into one vertex format (pos,
+  colour, uv) and expanded to triangles, then handed to a **Device** (`device.h`) as one `Draw` record. One
+  re-authored program stands in for the game's shader permutations.
+  - Each colour target address gets its own RGBA8 texture (GL: + FBO). Rows are stored top first.
   - Textures come from the T#: game memory is detiled with our `formats/gnm_detile` (BC7 tile 13, the same reader as
     `dcp_tex`) and uploaded once per T#. Invalidation: `texwatch` write-protects the uploaded pages; a game write faults
     once (vectored handler logs the page, restores access) and the file shim calls `host_write()` before ReadFile, so a
     rewritten texture is re-uploaded in place. Memory that is not plain RW falls back to a 512-byte head hash.
 - Display: the target named by the flip's buffer index (`sceVideoOutRegisterBuffers`), otherwise the busiest target.
+
+## Two renderers
+`--renderer auto|gpu|gl` (default auto; env `DCP_RENDERER` when the argument is absent; launcher Settings "Renderer").
+All decoding stays in `backend.cpp`; only the device differs.
+- **SDL GPU** (`gpu_device.cpp`, SDL_gpu; SDL picks Vulkan or D3D12, `SDL_GPU_DRIVER=vulkan|direct3d12` forces one).
+  We own the swapchain, so driver-forced antialiasing on the window cannot break the present (the GTX 1660 black
+  window, bug reports 28/29). Record then submit: draws are recorded (target, scissor, pipeline key, textures +
+  samplers, std140 uniforms, vertex range); `end_frame` does one copy pass (texture uploads + one vertex buffer) and
+  one render pass per run of draws on the same target (load LOAD; a new target's first pass clears it to 0).
+  Pipelines are cached by blend state + primitive, samplers by wrap / filter. SDL_gpu's NDC y = +1 is row 0 on every
+  backend, so its VS does not negate y (the GL VS does); both keep targets top row first, uv v = 0 = row 0, scissor y
+  from row 0. Its VS also remaps z from GL's [-w, w] to [0, w] so the same primitives are clipped. A draw that samples
+  its own target (undefined in GL) samples a copy taken just before it (logged). Present: swapchain mailbox, else
+  immediate, else vsync (the game paces itself). Readback (`--shot`, F12): download transfer buffer + fence.
+- **OpenGL 3.3** (`gl_device.cpp`): executes each draw at once, as before the split (output byte-identical to the
+  pre-split replay). Used for `--renderer gl` and as the automatic fallback: in auto, any SDL GPU failure (no device,
+  no swapchain, a shader / pipeline / texture format the driver rejects) is logged as `render: OpenGL fallback:
+  <reason>` and the window is recreated for GL. `--renderer gpu` fails instead. `DCP_GPU_FAIL=1` forces the failure
+  (test switch).
+- Shaders: `shaders/*.vert|frag` (GLSL 450, SDL_gpu set conventions: VS uniforms set 1, FS samplers set 2, FS
+  uniforms set 3). `tools/build_shaders.ps1` (Vulkan SDK glslc + spirv-cross + dxc, Windows SDK dxil.dll for signing)
+  writes SPIR-V and signed DXIL SM 6.0 byte arrays to `shaders/generated/` (checked in; normal builds need no SDK).
+  `main.frag` is `kFs` in `gl_device.cpp`: change both.
+- GL only: `DCP_RENDER_TEXDUMP` (reads the texture back through GL). Everything else (F1 stats, F12 capture,
+  `DCP_PROMPT_EVENTS`, `DCP_RENDER_AB`, `DCP_RENDER_DUMP` / `PICK`, the IME box via imgui_impl_sdlgpu3) works on both.
 
 ## Confirmed (asm or captured data)
 - Sprite constant slots (FUN_005a6fb0): VS cb0 is 0x40, 0x44 or 0x50 B depending on the VS index (bitmasks 0x5840,

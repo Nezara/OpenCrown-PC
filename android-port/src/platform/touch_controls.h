@@ -20,6 +20,11 @@ class TouchControls {
   void move(int64_t finger, float x, float y);
   void up(int64_t finger);
   void clear() { fingers_.clear(); }
+  // The finger is on the game picture (not on a control).
+  bool on_picture(int64_t finger) const {
+    auto it = fingers_.find(finger);
+    return it != fingers_.end() && it->second.kind == SCREEN;
+  }
   // false: the controls are hidden; new fingers are all front-panel touches.
   void set_controls(bool on) { controls_ = on; }
   void set_opacity(float o) { opacity_ = o < 0 ? 0 : o > 1 ? 1 : o; }  // scales every alpha (input.ini touch_opacity)

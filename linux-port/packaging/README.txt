@@ -1,7 +1,14 @@
 OpenCrown for Linux / Steam Deck - test build (no game files included - you need your own PS4/PS5 dump)
 
 Needs: a 64-bit Linux with glibc 2.35 or newer (SteamOS 3.5+, Ubuntu 22.04+, Debian 12+, Fedora, Arch, ...)
-and OpenGL 3.3.
+and Vulkan or OpenGL 3.3. The game draws with Vulkan (SDL GPU) when the graphics driver has it and switches
+to OpenGL by itself when it does not. If the picture stays black or the game does not start, set the
+launcher's Settings > Renderer to OpenGL.
+
+Room text chat (online rooms only; switch it off on the launcher's Online page): press Enter (the "Open room
+chat" key on the Controls page) to type, Enter sends, Esc closes. On a Steam Deck: double tap the screen
+and hold (tap, then touch and hold the same spot); Steam's on-screen keyboard opens with the chat box. B closes the chat box without sending. /mute <name> in chat
+mutes a player.
 
 Desktop Linux:
 1. Make it executable: right-click the .AppImage > Properties > allow executing, or

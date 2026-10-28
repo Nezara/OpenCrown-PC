@@ -199,6 +199,7 @@ public:
         }
     }
     bool kbm_active() const override { return dev_.kbm(); }
+    bool left_mouse_is_touch() const override { return mouse_touch(); }
     void set_blocked(bool b) override { blocked_ = b; }
 
     void update(SDL_Window* win) override {
@@ -484,6 +485,8 @@ void DeviceTracker::on_event(const SDL_Event& e) {
     default: break;
     }
 }
+
+bool steam_deck_host() { return on_steam_deck(); }
 
 std::map<std::string, std::string> prompt_bindings(const std::string& dir) {
     std::map<std::string, std::string> out;

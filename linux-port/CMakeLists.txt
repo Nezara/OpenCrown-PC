@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)  # Ubuntu 22.04 stock cmake
 project(OpenCrownLinux C CXX)
-set(OPENCROWN_VERSION "1.0.5.2")  # Linux build; versioned separately from the Windows build in ../port
+set(OPENCROWN_VERSION "1.0.6")  # Linux build; versioned separately from the Windows build in ../port
 # Updater end-to-end tests build a fake newer release in a separate build dir (packaging/make-appimage.sh, OC_VERSION).
 if(OPENCROWN_VERSION_OVERRIDE)
   set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")
@@ -117,7 +117,7 @@ target_include_directories(dcp_texwatch PUBLIC src)
 add_library(dcp_net STATIC src/net/net.cpp src/net/udp_carrier.cpp src/net/stun.cpp src/net/upnp.cpp src/net/rudp.cpp
   src/net/json.cpp src/net/ws.cpp src/net/lobby_client.cpp src/net/lobby_server.cpp src/net/tls.cpp
   src/net/online_check.cpp src/net/identity.cpp src/net/friends.cpp src/net/bug_report.cpp
-  src/net/http.cpp src/net/update.cpp)
+  src/net/http.cpp src/net/update.cpp src/net/chat.cpp)
 target_include_directories(dcp_net PUBLIC src)
 target_link_libraries(dcp_net PUBLIC Threads::Threads PRIVATE libminiupnpc-static mbedtls mbedx509 mbedcrypto)
 
@@ -149,10 +149,14 @@ if(DCP_RENDER)
   FetchContent_MakeAvailable(SDL3)
   target_compile_options(SDL3-static PRIVATE -w)  # third-party
 
-  # Stage 4 renderer (GL side): shared by dcp_viewer and dcp_run --render. GL entry points come from the caller's loader.
-  add_library(dcp_render STATIC src/render/gl.cpp src/render/png.cpp src/render/backend.cpp src/render/prompts.cpp)
+  # Stage 4 renderer: shared by dcp_viewer and dcp_run --render. Two devices under one replay (src/render/device.h):
+  # OpenGL 3.3 (GL entry points come from the caller's loader) and SDL_gpu on Vulkan (SPIR-V prebuilt into
+  # src/render/shaders/generated, so no shader compiler / Vulkan SDK is needed; SDL dlopens libvulkan at run time).
+  add_library(dcp_render STATIC src/render/gl.cpp src/render/gl_device.cpp src/render/gpu_device.cpp src/render/png.cpp
+    src/render/backend.cpp src/render/prompts.cpp)
   target_include_directories(dcp_render PUBLIC src)
-  target_link_libraries(dcp_render PUBLIC dcp_formats dcp_texwatch freetype)
+  target_compile_definitions(dcp_render PUBLIC DCP_HAVE_SDL_GPU)
+  target_link_libraries(dcp_render PUBLIC dcp_formats dcp_texwatch freetype SDL3::SDL3-static)
 endif()
 
 # dcp_run: --render (GL window / screenshots) with DCP_RENDER, headless layer-3 behaviour otherwise.
@@ -175,12 +179,13 @@ if(DCP_RENDER)
   FetchContent_MakeAvailable(imgui)
   add_library(dcp_imgui STATIC ${imgui_SOURCE_DIR}/imgui.cpp ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp)  # sdlgpu3: dcp_run's name-entry box / chat on the SDL GPU renderer
   target_include_directories(dcp_imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
   target_compile_options(dcp_imgui PRIVATE -w)  # third-party
   target_link_libraries(dcp_imgui PUBLIC SDL3::SDL3-static ${CMAKE_DL_LIBS})
-  # dcp_run's name-entry box (the PS4 keyboard dialog's stand-in).
-  target_sources(dcp_run PRIVATE tools/dcp_run/ime_box.cpp)
+  # dcp_run's name-entry box (the PS4 keyboard dialog's stand-in) and the room chat overlay.
+  target_sources(dcp_run PRIVATE tools/dcp_run/ime_box.cpp tools/dcp_run/chat_box.cpp)
   target_link_libraries(dcp_run PRIVATE dcp_imgui)
 
   add_executable(opencrown_launcher tools/launcher/main.cpp)

@@ -151,6 +151,7 @@ struct Settings {
     bool saves_chosen = false;  // the user picked the save folder (or the default) once; false = ask on start
     bool fullscreen = false;
     bool uhd = false;  // 4K rendering (PS4 Pro mode, dcp_run --4k)
+    std::string renderer = "auto";  // dcp_run --renderer: auto (SDL GPU, OpenGL if that fails) | gpu | gl
     int width = 1280, height = 720;
     std::string language = "en";  // game language, passed as DCP_LANGUAGE (hle/services.cpp system_language)
     // Online (passed as DCP_LOBBY / DCP_NP_NAME / DCP_UPNP; the game's own online menu uses them)
@@ -159,6 +160,7 @@ struct Settings {
     std::string name;   // online name shown to others: 3..16 of [A-Za-z0-9_-] (net/identity.h online_name)
     bool upnp = true;
     bool check_updates = true;  // start-up update check (Update page)
+    bool chat = true;  // room text chat (net/chat.h); off = DCP_CHAT=0, nothing sent or shown
 };
 
 void load_settings(const std::string& path, Settings& s) {
@@ -174,6 +176,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "saves_chosen") s.saves_chosen = s.saves_chosen || v == "1" || v == "true";
         else if (k == "fullscreen") s.fullscreen = v == "1" || v == "true";
         else if (k == "uhd") s.uhd = v == "1" || v == "true";
+        else if (k == "renderer") s.renderer = v == "gpu" || v == "gl" ? v : "auto";
         else if (k == "width") s.width = std::clamp(std::atoi(v.c_str()), 320, 16384);
         else if (k == "height") s.height = std::clamp(std::atoi(v.c_str()), 180, 16384);
         else if (k == "language") s.language = v;
@@ -181,6 +184,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "name") s.name = v.substr(0, 16);
         else if (k == "upnp") s.upnp = v == "1" || v == "true";
         else if (k == "check_updates") s.check_updates = !(v == "0" || v == "false");
+        else if (k == "chat") s.chat = v == "1" || v == "true";
     }
 }
 
@@ -188,9 +192,11 @@ void save_settings(const std::string& path, const Settings& s) {
     std::ofstream o(path);
     o << "# OpenCrownPC Launcher settings\n"
       << "dump = " << s.dump << "\nsaves = " << s.saves
-      << "\nsaves_chosen = " << (s.saves_chosen ? "true" : "false") << "\nuhd = " << (s.uhd ? "true" : "false") << "\nfullscreen = " << (s.fullscreen ? "true" : "false") << "\nwidth = " << s.width
+      << "\nsaves_chosen = " << (s.saves_chosen ? "true" : "false") << "\nuhd = " << (s.uhd ? "true" : "false")
+      << "\nrenderer = " << s.renderer << "\nfullscreen = " << (s.fullscreen ? "true" : "false") << "\nwidth = " << s.width
       << "\nheight = " << s.height << "\nlanguage = " << s.language << "\nlobby = " << s.lobby << "\nname = " << s.name
       << "\nupnp = " << (s.upnp ? "true" : "false") << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
+      << "\nchat = " << (s.chat ? "true" : "false")
       << "\n";
 }
 
@@ -331,6 +337,7 @@ const std::map<std::string, const char*> kLabels = {
     {"look_up", "Right stick up"}, {"look_down", "Right stick down"}, {"look_left", "Right stick left"},
     {"look_right", "Right stick right"}, {"fairy", "Fairy pointer (hold)"}, {"fairy_toggle", "Fairy pointer (toggle)"},
     {"fairy_tap", "Fairy tap (in fairy mode)"}, {"pointer_tap", "Pointer interact (after right stick keys)"},
+    {"chat", "Open room chat"},
 };
 
 // ---- dump validation ----
@@ -445,6 +452,7 @@ bool start_game(Game& g, const Settings& s, const std::string& user, const std::
     std::vector<std::string> args = {exe, eboot, "--render", "--window"};
     if (s.fullscreen) args.push_back("--fullscreen");
     if (s.uhd) args.push_back("--4k");
+    args.push_back("--renderer"), args.push_back(s.renderer);
     args.push_back("--size"), args.push_back(std::to_string(s.width) + "x" + std::to_string(s.height));
     std::vector<char*> argv;
     for (std::string& a : args) argv.push_back(a.data());
@@ -460,6 +468,7 @@ bool start_game(Game& g, const Settings& s, const std::string& user, const std::
     set_env("DCP_LOBBY", trim(s.lobby));
     set_env("DCP_NP_NAME", s.name);
     set_env("DCP_UPNP", s.upnp ? "" : "0");
+    set_env("DCP_CHAT", s.chat ? "" : "0");
 
     // stdin /dev/null, stdout + stderr to the log; nothing else inherited (no sockets of a friends / bug-report
     // session running at the time). Working dir = the launcher's folder, like on Windows.
@@ -2080,6 +2089,21 @@ int main(int argc, char** argv) {
                 ImGui::Checkbox("4K rendering (PS4 Pro mode)", &set.uhd);
                 ImGui::TextColored(kDim, "The game renders at 3840x2160 with its Pro assets; the window scales the picture.");
                 ImGui::Spacing();
+                {
+                    static const char* const kRendererIds[] = {"auto", "gpu", "gl"};
+                    static const char* const kRendererNames[] = {"Auto", "SDL GPU (Vulkan)", "OpenGL"};
+                    int r = 0;
+                    for (int i = 0; i < 3; ++i)
+                        if (set.renderer == kRendererIds[i]) r = i;
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Renderer:");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(220 * scale);
+                    if (ImGui::Combo("##renderer", &r, kRendererNames, 3)) set.renderer = kRendererIds[r];
+                    ImGui::TextColored(kDim, "Auto uses SDL GPU and switches to OpenGL if the graphics driver cannot run it.\n"
+                                             "Try OpenGL if the picture stays black or the game does not start.");
+                }
+                ImGui::Spacing();
                 ImGui::TextUnformatted("Window size:");
                 static const int kPresets[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}};
                 int sel = 3;
@@ -2148,6 +2172,10 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 ImGui::TextColored(kDim, "3-16 letters, digits, _ or -");
                 ImGui::Checkbox("Open the game port on the router (UPnP)", &set.upnp);
+                ImGui::Checkbox("Room text chat", &set.chat);
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, gm || env_on("SteamDeck") ?"double tap the screen and hold in an online room; /mute <name> in chat"
+                                                 : "the chat key (Controls) in an online room; /mute <name> in chat");
                 bool testing;
                 {
                     std::lock_guard<std::mutex> lk(conn.mu);

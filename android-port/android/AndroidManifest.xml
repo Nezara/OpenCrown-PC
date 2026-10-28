@@ -2,8 +2,8 @@
 <!-- OpenCrown Mobile for Android. Built without Gradle by android/build_apk.sh (aapt2 + javac + d8 + apksigner). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.opencrown.mobile"
-    android:versionCode="4"
-    android:versionName="0.1.3">
+    android:versionCode="5"
+    android:versionName="0.1.4">
 
     <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
 

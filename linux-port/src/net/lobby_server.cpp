@@ -104,6 +104,8 @@ struct Client {
     Attrs user_bin;
     uint64_t room = 0;
     uint16_t member = 0;
+    double chat_tokens = 5;  // chat bucket (4.6): 5 burst, 1/s
+    int64_t chat_ms = 0;
     bool closing = false;
 };
 
@@ -723,6 +725,39 @@ struct LobbyServer::Impl {
             for (const auto& a : j.get("int_attrs").elems()) r.int_attrs[int(a.get("id").as_int())] = a.get("value").as_int();
             attrs_merge(r.bin_external, attrs_from(j.get("bin_external")));
             return reply(c, j, Json::object());
+        }
+        if (op == "chat") {  // 4.6: like the Worker; to every live member incl. the sender, never held for a seat in grace
+            if (!c.verified) return reply(c, j, Json::object(), kErrUnverified);
+            auto it = rooms.find(c.room);
+            if (it == rooms.end() || (j.has("room_id") && j.get("room_id").as_u64() != c.room))
+                return reply(c, j, Json::object(), kErrNoRoom);
+            std::string text;
+            for (unsigned char ch : j.get("text").as_string())
+                if (ch >= 0x20 && ch != 0x7f) text += char(ch);
+            size_t a = text.find_first_not_of(' '), z = text.find_last_not_of(' ');
+            text = a == std::string::npos ? "" : text.substr(a, z - a + 1);
+            size_t chars = 0, cut = text.size();
+            for (size_t i = 0; i < text.size(); ++i)
+                if ((uint8_t(text[i]) & 0xc0) != 0x80 && chars++ == 120) cut = i;
+            text.resize(cut);
+            if (text.empty()) return reply(c, j, Json::object(), kErrBadRequest);
+            const int64_t now = now_ms();
+            c.chat_tokens = std::min(5.0, c.chat_tokens + (c.chat_ms ? double(now - c.chat_ms) / 1000.0 : 0.0));
+            c.chat_ms = now;
+            if (c.chat_tokens < 1) return reply(c, j, Json::object(), kErrLimit);
+            c.chat_tokens -= 1;
+            reply(c, j, Json::object());
+            Room& r = it->second;
+            Json e;
+            e["room_id"] = u64_str(r.id);
+            e["member_id"] = int64_t(c.member);
+            e["account_id"] = u64_str(c.account);
+            e["name"] = c.name;
+            e["text"] = text;
+            for (auto& [mid, cid] : r.members)
+                if (!r.away.count(mid))
+                    if (Client* m = by_id(cid)) event(*m, "chat", e);
+            return;
         }
         if (op == "set_presence") {  // 4.3: held per connection, never stored; cleared by "" or on disconnect
             if (!c.verified) return reply(c, j, Json::object(), kErrUnverified);

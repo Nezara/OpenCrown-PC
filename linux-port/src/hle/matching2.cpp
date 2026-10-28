@@ -60,6 +60,7 @@
 
 #include "common.h"
 #include "net/carrier.h"
+#include "net/chat.h"
 #include "net/lobby_client.h"
 #include "net/rudp.h"
 #include "net/stun.h"
@@ -131,7 +132,7 @@ struct MemberInfo {
 };
 
 enum class Kind { Hello, Worlds, SetUserInfo, CreateJoin, Join, Leave, Search, SetInternal, SetExternal, Endpoint,
-                  SetPresence, FriendList, Rehello, Resume, SearchProbe };
+                  SetPresence, FriendList, Rehello, Resume, SearchProbe, Chat };
 struct Pending {
     Kind kind;
     uint32_t req_id = 0;  // the id the game got back (0 for internal requests)
@@ -808,6 +809,13 @@ void matching2_pump() {
                     if (m.err) std::fprintf(stderr, "MATCHING2 set_presence failed: 0x%08x\n", uint32_t(m.err));
                     continue;
                 }
+                if (p.kind == Kind::Chat) {  // ok = the lobby's echo follows as a "chat" event
+                    if (m.err)
+                        net::chat::notice(m.err == int32_t(0x80550c0a) ? "Not sent: you are sending too fast."
+                                          : m.err == int32_t(0x80550c08) ? "Not sent: chat needs a registered online name."
+                                                                          : "Not sent: the lobby refused the message.");
+                    continue;
+                }
                 if (p.kind == Kind::FriendList) {  // GetPresence (friends.md 5): rows = friends in a room with a blob
                     g_fl_result.clear();
                     size_t n = 0;
@@ -989,6 +997,10 @@ void matching2_pump() {
                     if (oid != id && oid != g_me && id != g_me && port && o.ip_be == ip && o.port_be == port)
                         std::fprintf(stderr, "MATCHING2 members 0x%x and 0x%x share one public endpoint %s:%lld\n", oid, id,
                                      b.get("ip").as_string().c_str(), (long long)b.get("port").as_int());
+            } else if (m.ev == "chat") {  // ours (lobby_protocol.md 4.6): to the overlay, never to the game
+                uint16_t id = uint16_t(b.get("member_id").as_int());
+                net::chat::received(b.get("account_id").as_u64(), b.get("name").as_string(), b.get("text").as_string(),
+                                    id == g_me, (id >> 4) - 1);
             } else if (m.ev == "signal_dead") {
                 uint16_t id = uint16_t(b.get("member_id").as_int());
                 auto it = g_signals.find(id);
@@ -1043,6 +1055,15 @@ void matching2_pump() {
                 issue(Kind::Endpoint, "endpoint", e, nullptr, 0);
             }
             endpoint_final = port && !waiting && !g_endpoint_inflight;
+        }
+        // Room chat (net/chat.h): what the player typed goes out while we hold a seat and the link is up.
+        const bool chat_ok = g_room && g_hello_ok && !g_lobby_down && !g_link_lost;
+        net::chat::set_in_room(chat_ok);
+        for (std::string t; chat_ok && net::chat::next_outgoing(&t);) {
+            Json cm;
+            cm["room_id"] = net::u64_str(g_room);
+            cm["text"] = t;
+            issue(Kind::Chat, "chat", cm, nullptr, 0);
         }
         // Signaling Established per peer: only once the game can act on it (callback registered after the
         // create/join response, socket bound by RudpMgr_OpenSocket, member known from the room data).

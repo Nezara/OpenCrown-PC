@@ -425,6 +425,45 @@ describe("lobby protocol rev 1", () => {
   });
 
   // ---- hardening (lobby_protocol.md 4.5) ----
+  it("chat (4.6): verified room members only, echoed to all, cleaned + capped, rate limited, never held", async () => {
+    const a = await Client.open("198.51.100.70"), b = await Client.open("198.51.100.71");
+    const u = await Client.open("198.51.100.72");
+    await a.hello("ChatA", "9951", 40001, secret());
+    const sb = secret();
+    await b.hello("ChatB", "9953", 40002, sb);
+    await u.hello("ChatU", "0", 40003);
+    expect((await a.req("chat", { text: "hi" })).err).toBe(0x80550d0f | 0); // no room
+    expect((await u.req("chat", { text: "hi" })).err).toBe(ERR.unverified);
+    const room = (await a.req("create_room", createReq(3))).room;
+    await b.req("join", { room_id: room.room_id });
+    await a.event("member_joined");
+    expect((await a.req("chat", { text: " \u0001\n " })).err).toBe(ERR.bad); // empty once cleaned
+    expect((await a.req("chat", { room_id: room.room_id, text: "  hello\u0007 there  " })).err).toBe(0);
+    const want = { room_id: room.room_id, member_id: 0x10, account_id: "9951", name: "ChatA", text: "hello there" };
+    expect(await b.event("chat")).toMatchObject(want);
+    expect(await a.event("chat")).toMatchObject(want); // the sender's echo
+    await a.req("chat", { text: "\u{1f409}".repeat(200) });
+    expect([...(await b.event("chat")).text].length).toBe(120);
+    // Burst 5 (two used above), then ERR_LIMIT; the socket stays open and other ops still work.
+    const errs = [];
+    for (let i = 0; i < 4; ++i) errs.push((await a.req("chat", { text: `m${i}` })).err);
+    expect(errs).toEqual([0, 0, 0, ERR.limit]);
+    expect((await a.req("worlds")).err).toBe(0);
+    // A seat in grace gets no chat held (resume still works after a chatty minute).
+    await b.close();
+    await new Promise((r) => setTimeout(r, 100));
+    await runInDurableObject(lobbyStub(), async (o: unknown) => {
+      (o as any).chatRl.clear(); // eslint-disable-line @typescript-eslint/no-explicit-any
+    });
+    for (let i = 0; i < 5; ++i) expect((await a.req("chat", { text: `x${i}` })).err).toBe(0);
+    const b2 = await Client.open("198.51.100.71");
+    await b2.hello("ChatB", "9953", 40012, sb);
+    expect((await b2.req("resume", { room_id: room.room_id, member_id: 0x20 })).err).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(b2.inbox.filter((m) => m.ev === "chat")).toEqual([]);
+    await Promise.all([a.close(), b2.close(), u.close()]);
+  });
+
   it("names: control characters stripped, 16 chars kept", async () => {
     const a = await Client.open("198.51.100.11");
     await a.hello("Ab\u0001c\u007fdefghijklmnop\nqrstu", "0", 1);

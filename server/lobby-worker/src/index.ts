@@ -152,6 +152,11 @@ const ROOM_OPS = new Set(["create_room", "join", "leave", "search", "resume"]);
 // Env SEAT_GRACE_MS overrides it ("0" = off: a close is a leave, as before).
 const AWAY_GRACE_MS = 30000;
 const MAX_HELD_EVENTS = 32;
+// Room chat (4.6): relayed to the room, never stored. Own bucket per connection, kept in memory only (a hibernation
+// wake-up refills it, which is harmless at these rates).
+const MAX_CHAT = 120; // characters (code points) after control characters are stripped
+const CHAT_BURST = 5;
+const CHAT_PER_S = 1;
 const FRIEND_OPS = new Set(["friend_code", "friend_request", "friend_requests", "friend_accept", "friend_decline",
   "friend_remove", "friend_list"]);
 
@@ -288,6 +293,7 @@ const mids = (r: Room): number[] => Object.keys(r.members).map(Number).sort((a, 
 export class Lobby implements DurableObject {
   private sql: SqlStorage;
   private rooms = new Map<string, Room>();
+  private chatRl = new Map<string, [number, number]>(); // cid -> chat tokens, last refill (unix ms)
   private ipSalt: string;
   private ipHmac: Promise<CryptoKey> | null = null;
   private graceMs: number;
@@ -674,6 +680,7 @@ export class Lobby implements DurableObject {
       else this.leaveRoom(ws, c, 2);
     }
     const wasPresent = c.hello && c.verified && c.presence !== false;
+    this.chatRl.delete(c.cid);
     c.cid = ""; // marks the attachment as gone: no presence, no events
     this.save(ws, c);
     if (wasPresent && !this.present(c.account)) this.presenceEvent(c.account, false);
@@ -1044,6 +1051,8 @@ export class Lobby implements DurableObject {
         }
         return reply({});
       }
+      case "chat":
+        return this.chat(c, j, reply);
       case "set_room_internal":
       case "set_room_external": {
         const r = this.rooms.get(c.room);
@@ -1073,6 +1082,33 @@ export class Lobby implements DurableObject {
       }
       default:
         return reply({}, ERR_BAD_REQUEST);
+    }
+  }
+
+  // ---- room chat (lobby_protocol.md 4.6) ----
+  // Verified members only (mutes are per account). Sent to every live member, the sender included (its echo is the
+  // confirmation); never held for a seat in grace, so chat cannot push a reconnecting player over MAX_HELD_EVENTS.
+  private chat(c: Conn, j: Json, reply: (body: Json, err?: number) => void) {
+    if (!c.verified) return reply({}, ERR_UNVERIFIED);
+    const r = this.rooms.get(c.room);
+    if (!r || ("room_id" in j && u64(j.room_id).toString() !== c.room)) return reply({}, ERR_NO_ROOM);
+    const text = [...clean(str(j.text), 4 * MAX_CHAT).trim()].slice(0, MAX_CHAT).join("");
+    if (!text) return reply({}, ERR_BAD_REQUEST);
+    const now = Date.now();
+    const [t0, last] = this.chatRl.get(c.cid) ?? [CHAT_BURST, now];
+    const t = Math.min(CHAT_BURST, t0 + (Math.max(0, now - last) / 1000) * CHAT_PER_S);
+    if (t < 1) {
+      this.chatRl.set(c.cid, [t, now]);
+      return reply({}, ERR_LIMIT);
+    }
+    this.chatRl.set(c.cid, [t - 1, now]);
+    reply({});
+    const body = { room_id: r.id, member_id: c.member, account_id: c.account, name: c.name, text };
+    for (const mid of mids(r)) {
+      const m = r.members[mid];
+      if (m.away) continue;
+      const o = this.conn(m.cid);
+      if (o) this.event(o.ws, "chat", body);
     }
   }
 

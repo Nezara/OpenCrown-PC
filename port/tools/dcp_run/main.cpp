@@ -1,4 +1,4 @@
-// dcp_run <eboot.bin> [--dry] [--input script.txt] [--frames N] [--render] [--window] [--fullscreen] [--size WxH] [--shot out.png]: load the user's eboot (and its sce_module/libc.prx, if present) into this process,
+// dcp_run <eboot.bin> [--dry] [--input script.txt] [--frames N] [--render] [--window] [--fullscreen] [--size WxH] [--shot out.png] [--renderer auto|gpu|gl]: load the user's eboot (and its sce_module/libc.prx, if present) into this process,
 // relocate, bind imports to the user's libc exports, HLE shims or logging stubs, and (without --dry) run libc's
 // module_start and the eboot entry until the first fault / exit, reporting where and why.
 #include <atomic>
@@ -228,8 +228,10 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr, "usage: dcp_run <eboot.bin> [--dry] [--input script.txt] [--frames N]\n"
                              "               [--render] [--window] [--fullscreen] [--size WxH] [--4k]\n"
-                             "               [--shot out.png] [--shots N=a.png,M=b.png]\n"
-                             "  --render: replay the game's frames with GL (hidden window); --window shows them;\n"
+                             "               [--shot out.png] [--shots N=a.png,M=b.png] [--renderer auto|gpu|gl]\n"
+                             "  --render: replay the game's frames (hidden window); --window shows them;\n"
+                             "  --renderer: auto = SDL GPU (Vulkan / D3D12), OpenGL if that fails (default; env\n"
+                             "  DCP_RENDERER when the argument is absent); gpu = SDL GPU or fail; gl = OpenGL 3.3\n"
                              "  --fullscreen: borderless desktop fullscreen (implies --window); --size: window size (1280x720)\n"
                              "  --4k: PS4 Pro mode, the game renders at 3840x2160\n"
                              "  --shot writes the frame at vblank --frames N and exits; --shots several (vblank=path)\n"
@@ -242,7 +244,7 @@ int main(int argc, char** argv) {
     uint64_t max_frames = 0;
     bool render = false, window = false, fullscreen = false, neo = false;
     int width = 1280, height = 720;
-    std::string shot;
+    std::string shot, renderer;
     std::vector<std::pair<uint64_t, std::string>> shots;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dry") == 0) dry = true;
@@ -252,6 +254,13 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--window") == 0) render = window = true;
         else if (std::strcmp(argv[i], "--fullscreen") == 0) render = window = fullscreen = true;
         else if (std::strcmp(argv[i], "--4k") == 0) neo = true;
+        else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
+            renderer = argv[++i];
+            if (renderer != "auto" && renderer != "gpu" && renderer != "gl") {
+                std::fprintf(stderr, "dcp_run: bad --renderer (auto, gpu or gl)\n");
+                return 2;
+            }
+        }
         else if (std::strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &width, &height) != 2 || width < 320 || height < 180 || width > 16384 ||
                 height > 16384) {
@@ -375,6 +384,11 @@ int main(int argc, char** argv) {
             ro.shots = shots;
             ro.input = input;
             ro.input_dir = input_dir;
+            if (renderer.empty()) {  // DCP_RENDERER only when --renderer is absent
+                const char* e = std::getenv("DCP_RENDERER");
+                renderer = e && *e ? e : "auto";
+            }
+            ro.renderer = renderer;
             finish(run_render_loop(ro, t, &finish));
         }
 #endif

@@ -15,6 +15,7 @@ struct RenderOptions {
     int width = 1280, height = 720;                         // initial window size
     SdlInputPump* input = nullptr;                          // live keyboard/mouse/gamepad source, or null
     std::string input_dir;                                  // folder of input.ini (button-prompt labels)
+    std::string renderer = "auto";                          // auto (SDL GPU, OpenGL fallback) | gpu | gl
 };
 
 // Runs on the process main thread until the game exits or the window closes (calls finish, never returns normally).

@@ -52,12 +52,12 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 
 - 🖥️ **Runs natively on Windows and Linux.** No PS4 emulator; the game's code runs as a regular Windows or Linux program.
 - 🕹️ **Steam Deck ready.** One AppImage file, playable from Game Mode: the launcher works with the controller and touch screen, the right trackpad steers the fairy pointer and tapping the screen sends the fairy to that spot.
-- 🎨 **Rewritten renderer** for OpenGL 3.3, at 1080p or **4K** (the PS4 Pro mode).
+- 🎨 **Rewritten renderer** on SDL GPU (Direct3D 12 or Vulkan on Windows, Vulkan on Linux) with an OpenGL 3.3 fallback, at 1080p or **4K** (the PS4 Pro mode).
 - 🎮 **Gamepads** (Xbox, DualShock / DualSense and others through SDL3), up to 4 local players, with rumble.
 - ⌨️ **Keyboard and mouse** with mouse attacks and the fairy pointer on the mouse, all rebindable.
 - 🔄 **Dynamic button prompts.** On-screen prompts switch between PlayStation buttons and your keyboard / mouse keys, following whichever you used last, and show your own bindings.
 - 💾 **PS4/PS5-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4/PS5 progress over and take it back.
-- 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with room codes and friend codes.
+- 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with room codes, friend codes and **room text chat**.
 - ⏭️ **Optional story and tutorial skip** on new characters (details [below](#what-is-changed-in-the-game)).
 - 🪟 **Launcher** for your dump, saves, controls, display, online settings and bug reports.
 - 🔄 **Built-in updates.** The launcher tells you when a new version is out, shows what changed and installs it with one click.
@@ -83,7 +83,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 |---|---|
 | **OS** | Windows 10 or 11, 64-bit, **or** 64-bit Linux with glibc 2.35+ (Steam Deck / SteamOS 3.5+, Ubuntu 22.04+, Debian 12+, Fedora, Arch, ...) |
 | **Android (beta)** | Android 9+, 64-bit ARM CPU, Vulkan 1.1, and your own decrypted PS Vita dump (PCSE00019) with the 1.09 update. See [Android](#android-beta). |
-| **GPU** | Anything with OpenGL 3.3 (most GPUs from the last ~12 years) |
+| **GPU** | Direct3D 12 or Vulkan for the default renderer; anything with OpenGL 3.3 (most GPUs from the last ~12 years) as the fallback |
 | **CPU** | A modern x86-64 CPU (the game's code runs on it directly) |
 | **Game** | Your own dump of **Dragon's Crown Pro (CUSA10454)** |
 | **Online** | An Internet connection. UPnP on your router helps but isn't required. |

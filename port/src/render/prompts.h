@@ -1,7 +1,7 @@
 // Button-prompt glyph swap (notes/map/button_prompts.md). The game draws every pad-button prompt (HUD, menus,
 // dialogs) as sprite parts sampling one 1024x512 BC7 button atlas. While keyboard/mouse is the last-used device, the
 // backend replaces those parts with key-cap / mouse glyphs we render ourselves (FreeType + a Windows system font), labelled
-// with the current input.ini binding. GL thread only.
+// with the current input.ini binding. Render thread only.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +10,8 @@
 #include <string>
 
 namespace dcp::render {
+
+class Device;
 
 // Pad buttons a prompt can show. Names match input.ini actions where one exists.
 enum class PadBtn : uint8_t {
@@ -32,7 +34,8 @@ struct PromptCell {
 
 class Prompts {
 public:
-    std::set<unsigned> atlas_ids;  // GL textures holding the button atlas
+    std::set<unsigned> atlas_ids;  // device textures holding the button atlas
+    Device* dev = nullptr;         // glyph textures are created here (set by Backend::init)
     bool kbm = false;              // keyboard/mouse prompts on
     bool log = false;              // DCP_PROMPT_LOG: print atlas uploads and every new atlas part drawn
 
@@ -44,7 +47,7 @@ public:
     // action (input.ini name) -> first bound input ("E", "Left Shift", "Mouse1"); call before draws (any thread
     // that owns the backend). Drops cached glyphs.
     void set_bindings(const std::map<std::string, std::string>& b);
-    // GL texture for the KB/M glyph of b (lazily rendered); *aspect = width / height. 0 if unbound / no font.
+    // Device texture for the KB/M glyph of b (lazily rendered); *aspect = width / height. 0 if unbound / no font.
     unsigned glyph(PadBtn b, float* aspect);
 
 private:

@@ -12,7 +12,7 @@ mutes a player.
 
 Desktop Linux:
 1. Make it executable: right-click the .AppImage > Properties > allow executing, or
-   chmod +x OpenCrown-Linux-*.AppImage
+   chmod +x OpenCrown-*.AppImage
 2. Run it. First start: choose where your saves go (default is fine).
 3. Game page: pick the folder holding your own dump (eboot.bin + the .CPK files).
 4. Online page: set your player name; add friends with friend codes. Press PLAY.

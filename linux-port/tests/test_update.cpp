@@ -52,8 +52,9 @@ static void test_versions() {
     CHECK(compare(parse_version("1.0.10"), parse_version("1.0.9")) > 0);
     CHECK(str(a) == "1.0.0" && str(c) == "1.0.1");
     for (const char* bad : {"", "v", "beta", "1.", "1..2", "1.0-rc1", "1.2.3.4.5", "1.x"}) CHECK(!parse_version(bad).ok);
-    CHECK(is_linux_asset("OpenCrown-Linux-1.0.1-x86_64.AppImage"));
+    CHECK(is_linux_asset("OpenCrown-Linux-1.0.1-x86_64.AppImage") && is_linux_asset("OpenCrown-1.0.7-x86_64.AppImage"));
     CHECK(!is_linux_asset("OpenCrownPC-v1.0-win64.zip") && !is_linux_asset("OpenCrown-Linux--x86_64.AppImage.zsync"));
+    CHECK(!is_linux_asset("OpenCrown-1.0.7-x86_64.AppImage.zsync") && !is_linux_asset("OpenCrownMobile-v0.1.4-beta-arm64.apk"));
 }
 
 static void test_markdown() {

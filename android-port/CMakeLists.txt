@@ -138,6 +138,7 @@ add_library(mobile_core STATIC
   src/hle/touch.cpp
   src/hle/pvf.cpp
   src/hle/skip_offers.cpp
+  src/hle/confirm_button.cpp
   src/gpu/vulkan.cpp
   src/gpu/overlay_shaders.cpp
   src/gpu/compute_shaders.cpp)

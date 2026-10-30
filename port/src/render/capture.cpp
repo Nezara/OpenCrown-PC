@@ -140,6 +140,10 @@ OBS(obs_set_vb) {  // (cue, stage, first, count, V#[])
     s.nvb = int(a2 + a3);
 }
 OBS(obs_set_blend) { UNUSED_ARGS; if (a1 == 0) { Locked l; state_of(a0).blend = uint32_t(a2); } }
+// Dcb_InitDefaultHardwareState(dcb): on the GPU this resets the context registers, CB_BLEND0_CONTROL to 0 (blend off).
+// The layer clear (VS24/PS51, FUN_0059a930) never sets blend and relies on it: without this reset it inherited the
+// last blend this DCB used, so after leaving a game for the title the intro logos piled up (bug reports 20 / 30).
+OBS(obs_init_default_state) { UNUSED_ARGS; Locked l; state_of(a0).blend = 0; }
 OBS(obs_set_prim) { UNUSED_ARGS; Locked l; state_of(a0).prim = uint32_t(a1) & 0x3f; }
 OBS(obs_set_index_size) { UNUSED_ARGS; Locked l; state_of(a0).index_size = uint32_t(a1) & 1; }
 OBS(obs_set_scissor) {  // (dcb, x0, y0, x1, y1): PA_SC_SCREEN_SCISSOR
@@ -179,7 +183,7 @@ struct HookSpec {
     uint8_t ins[4];  // lengths of the displaced instructions (0-terminated)
     bool jcc_last;   // last displaced instruction is a jcc rel32 (re-targeted in the relay)
 };
-// Standard prologue: push rbp (55) / mov rbp,rsp (48 89 e5) / push r1x (41 5x).
+// Standard prologue: push rbp (55) / mov rbp,rsp (48 89 e5) / push r1x (41 5x), or push rbx..rdi (5x) when ins[2] == 1.
 const HookSpec kHooks[] = {
     {0x5650d0, (void*)&obs_set_vs, {1, 3, 2}, false},       // Cue_SetVsShader(cue, VS entry+0x18, 0, fetch, ...)
     {0x565280, (void*)&obs_set_ps, {1, 3, 2}, false},       // Cue_SetPsShader(cue, PS entry+0x18, ...)
@@ -188,6 +192,7 @@ const HookSpec kHooks[] = {
     {0x5644b0, (void*)&obs_set_samp, {1, 3, 2}, false},     // Cue_SetSampler(cue, stage, slot, S#*)
     {0x564b30, (void*)&obs_set_vb, {2, 2, 6}, true},        // Cue_SetVertexBuffers: mov eax,ecx; test; je
     {0x55ffb0, (void*)&obs_set_blend, {1, 3, 2}, false},    // Dcb_SetBlendControl(dcb, rt, word)
+    {0x55fef0, (void*)&obs_init_default_state, {1, 3, 1}, false},  // Dcb_InitDefaultHardwareState(dcb): push rbx
     {0x5606a0, (void*)&obs_set_prim, {1, 3, 2}, false},     // Dcb_SetPrimitiveType(dcb, prim)
     {0x560970, (void*)&obs_set_index_size, {1, 3, 2}, false},
     {0x5612d0, (void*)&obs_set_scissor, {1, 3, 2}, false},  // Dcb_SetScreenScissor(dcb, x0, y0, x1, y1)
@@ -204,7 +209,9 @@ const HookSpec kHooks[] = {
 
 bool prologue_ok(const uint8_t* p, const HookSpec& h) {
     if (h.jcc_last) return p[0] == 0x89 && p[1] == 0xc8 && p[2] == 0x85 && p[3] == 0xc0 && p[4] == 0x0f && p[5] == 0x84;
-    return p[0] == 0x55 && p[1] == 0x48 && p[2] == 0x89 && p[3] == 0xe5 && p[4] == 0x41 && (p[5] & 0xf0) == 0x50;
+    bool head = p[0] == 0x55 && p[1] == 0x48 && p[2] == 0x89 && p[3] == 0xe5;
+    if (h.ins[2] == 1) return head && (p[4] & 0xf8) == 0x50;
+    return head && p[4] == 0x41 && (p[5] & 0xf0) == 0x50;
 }
 
 uint8_t* alloc_near(uint64_t from, size_t size) {

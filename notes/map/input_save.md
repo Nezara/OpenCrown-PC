@@ -115,7 +115,9 @@ Requests are raised by setting bits 0x1000 / 0x2000 / 0x4000 on the DcSaveLoad t
 
 ## 4. Settings / system
 - **Language**: `sceSystemServiceParamGetInt(1 = LANG)` in FUN_00016da0 (setup, case 0 of the startup state machine) and FUN_00017750. Mapping to DcCore+0x130: PS4 lang 2 or 0x16 (French / French-Canada) -> 3, 3 or 0x14 (Spanish / Latin Spanish) -> 4, 4 (German) -> 5, 5 (Italian) -> 6, everything else (incl. Japanese, English) -> 1. A getter (FUN_00025740, 85 callers) uses `this+0x130 - 2 < 5` to select the message-sheet table (entries per language, e.g. MSGSHEET_SYSTEMMSG_US_FMS default) - these are the per-language resource names; the shim just returns the desired language int. 0x134 = flag set to 1 afterwards. The startup state machine also resolves `SND/...ACB/AWB` names here, so **language must be known before the first scene** (already read at DcCore start).
-- No region, age (`sceSystemServiceParamGetInt` is called with id 1 only), time-zone or enter-button (circle/cross swap: not read; the game hard-wires the mapping above: CROSS = 0x40, CIRCLE = 0x20 for its own confirm/cancel convention, (unverified) uses Western or JP style) queries.
+- No region, age (`sceSystemServiceParamGetInt` is called with id 1 only), time-zone or enter-button queries. The
+  confirm/cancel layout is the game's own flag DcCore+0x134 (0 = Circle confirms, JP), set to 1 (Western) at startup:
+  see confirm_cancel.md (superseded the earlier "hard-wired" note here; hle/confirm_button.cpp switches it).
 - Other per-frame imports already listed in engine.md; nothing new here: `sceSystemServiceGetStatus` per frame (FUN_0059a2f0, return struct with all zero flags is enough), `sceNpCheckCallback`.
 - `FUN_0059bf60`: sign-in dialog helper (`sceSigninDialogInitialize/Open`, `GetInitialUser`), stub: return false.
 

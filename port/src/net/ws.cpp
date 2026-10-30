@@ -202,7 +202,8 @@ bool open_link(const std::string& host, uint16_t port, const std::string& path, 
         head += c;
     }
     if (head.compare(0, 12, "HTTP/1.1 101") != 0 || header(head, "Sec-WebSocket-Accept") != accept_key(key))
-        return fail("handshake rejected: " + head.substr(0, head.find('\r')));
+        return fail(head.empty() ? std::string("no answer to the handshake (connection closed)")
+                                 : "handshake rejected: " + head.substr(0, head.find('\r')));
     DWORD tmo = 0;  // back to blocking reads; callers use select() / Conn::readable()
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tmo), sizeof tmo);
     *out_s = s, *out_t = t;

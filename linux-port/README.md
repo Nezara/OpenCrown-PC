@@ -24,7 +24,7 @@ builds the launcher (`opencrown-launcher`), the game runner (`dcp_run`), the dev
 `DCP_RENDER=OFF ./build.sh` builds a headless `dcp_run` without SDL3.
 
 ## Packaging
-`sh packaging/make-appimage.sh` (on Ubuntu 22.04) builds `dist/OpenCrown-Linux-<version>-x86_64.AppImage`: the
+`sh packaging/make-appimage.sh` (on Ubuntu 22.04) builds `dist/OpenCrown-<version>-x86_64.AppImage` (plus its `.zsync` for AppImageUpdate and a copy named `OpenCrown-Linux-<version>-x86_64.AppImage` for launchers up to 1.0.6): the
 launcher and `dcp_run` with libstdc++ linked in, so players only need glibc 2.35 or newer (SteamOS 3.5+, Ubuntu
 22.04+, Debian 12+, Fedora, Arch). SDL loads X11 / Wayland / audio / GL / controller support from the system at run
 time. The AppImage carries the third-party notices and license texts (`packaging/THIRD-PARTY-NOTICES.txt`).

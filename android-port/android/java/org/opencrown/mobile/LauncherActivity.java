@@ -867,6 +867,17 @@ public class LauncherActivity extends Activity {
         }
         para("Sticks are fixed: left stick moves, right stick moves the pointer. Touching the screen is the game's "
                 + "touch screen (fairy pointer).").setTextColor(DIM);
+        final Ini layout = inputIni();
+        android.widget.CheckBox jp = new android.widget.CheckBox(this);
+        jp.setText("Japanese layout: Circle confirms, Cross cancels (menus only)");
+        jp.setTextColor(TEXT);
+        jp.setChecked("circle".equals(layout.get("confirm")));
+        jp.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean on) { layout.set("confirm", on ? "circle" : "cross"); }
+        });
+        content.addView(jp);
+        para("The game's own Japanese layout; button prompts follow it, combat buttons stay the same. Applies the next "
+                + "time the game starts.").setTextColor(DIM);
         LinearLayout br = row();
         Button reset = smallButton(br, "Reset to defaults", new View.OnClickListener() { public void onClick(View v) {
             for (String[] a : PAD_ACTIONS) padBinds.put(a[0], a[2]);
@@ -1712,6 +1723,7 @@ public class LauncherActivity extends Activity {
         args.add("--online-name");
         args.add(playerName());
         if (!upnpOn()) args.add("--no-upnp");
+        if ("circle".equals(inputIni().get("confirm"))) args.add("--confirm-circle");
         Intent i = new Intent(this, OpenCrownActivity.class);
         i.putExtra(OpenCrownActivity.EXTRA_ARGS, args.toArray(new String[0]));
         if (OpenCrownActivity.mainFinished()) { RestartActivity.restartInto(this, i); return; }  // after a failed start

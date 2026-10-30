@@ -26,6 +26,7 @@
 
 #include "hle/hle.h"
 #include "hle/ime.h"
+#include "hle/confirm_button.h"
 #include "hle/skip_offers.h"
 #include "loader/elf.h"
 #include "loader/hle.h"
@@ -400,6 +401,7 @@ int main(int argc, char** argv) {
         install_fault_handler();
         install_probes(reinterpret_cast<uint64_t>(eb->img.base));
         dcp::skip_offers::install(eb->img.base);  // story / tutorial skip questions for every new hero (skip_offers.h)
+        dcp::confirm_button::install(eb->img.base);  // DCP_CONFIRM=circle: Japanese button layout (confirm_button.h)
 #ifndef DCP_HAVE_RENDER
         if (render) throw std::runtime_error("--render needs a build with -DDCP_RENDER=ON (the default)");
 #else

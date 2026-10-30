@@ -34,6 +34,7 @@
 #include "hle/io.h"
 #include "hle/online.h"
 #include "hle/pvf.h"
+#include "hle/confirm_button.h"
 #include "hle/skip_offers.h"
 #ifdef OC_WINDOW
 #include "platform/sdl_app.h"
@@ -230,6 +231,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--lobby") && i + 1 < argc) lobby = argv[++i];
     else if (!std::strcmp(argv[i], "--online-name") && i + 1 < argc) online_name = argv[++i];
     else if (!std::strcmp(argv[i], "--no-upnp")) set_env("DCP_UPNP", "0");  // launcher's UPnP checkbox off
+    else if (!std::strcmp(argv[i], "--confirm-circle")) set_env("DCP_CONFIRM", "circle");  // Japanese layout
     else if (!std::strcmp(argv[i], "--input") && i + 1 < argc) input = argv[++i];
     else if (argv[i][0] == '-' || !path.empty()) return usage();
     else path = argv[i];
@@ -294,6 +296,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   hle::skip_offers_install(mem);  // story / tutorial skip questions for every new hero (hle/skip_offers.h)
+  hle::confirm_button_install(mem);  // $DCP_CONFIRM=circle: Japanese button layout (hle/confirm_button.h)
 
   std::map<std::string, int> per_lib;
   for (const ImportFunc& f : mod.imports) per_lib[f.lib]++;

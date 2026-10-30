@@ -121,16 +121,16 @@ Your settings, saves and logs all live in `Documents\Dragons Crown Pro\` unless 
 
 ### Linux / Steam Deck
 
-Everything is in one file: `OpenCrown-Linux-*-x86_64.AppImage` from [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest). Nothing to install, no root needed.
+Everything is in one file: `OpenCrown-<version>-x86_64.AppImage` from [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest). Nothing to install, no root needed.
 
 **Desktop Linux**
 
 1. **Download** the AppImage and put it wherever you like, for example `~/Games/OpenCrown/`.
 2. **Make it executable:** right-click it → *Properties* → *Permissions* → *Allow executing file as program*, or in a terminal:
    ```bash
-   chmod +x OpenCrown-Linux-*-x86_64.AppImage
+   chmod +x OpenCrown-*-x86_64.AppImage
    ```
-3. **Run it** (double-click, or `./OpenCrown-Linux-*-x86_64.AppImage`).
+3. **Run it** (double-click, or `./OpenCrown-*-x86_64.AppImage`).
 4. On the **Game** page, **browse to your dump folder**, choose where your saves go the first time, and press **Play**. 🎉
 
 **Steam Deck**

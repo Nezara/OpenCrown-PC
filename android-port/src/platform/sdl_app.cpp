@@ -19,6 +19,7 @@
 #include "hle/ctrl.h"
 #include "hle/ime.h"
 #include "hle/touch.h"
+#include "net/lobby_client.h"
 #include "platform/chat_overlay.h"
 #include "platform/text_entry.h"
 #include "platform/touch_controls.h"
@@ -317,7 +318,10 @@ int run_with_window(const AppOptions& opt, const std::function<void()>& guest) {
   SDL_AddEventWatch(
       [](void*, SDL_Event* e) -> bool {
         if (e->type == SDL_EVENT_WILL_ENTER_BACKGROUND) gpu::renderer().surface_lost();
-        else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) gpu::renderer().surface_restored();
+        else if (e->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+          gpu::renderer().surface_restored();
+          dcp::net::LobbyClient::instance().check_link();  // the network may have changed or dropped meanwhile
+        }
         return true;
       },
       nullptr);

@@ -113,6 +113,7 @@ struct Settings {
     bool net_trace = false;  // DCP_NET_TRACE=1: online session trace in last_run.log (hle/net_trace.h), diagnostics
     bool check_updates = true;  // ask GitHub for a newer launcher at start
     bool chat = true;  // room text chat (net/chat.h); off = DCP_CHAT=0, nothing sent or shown
+    bool confirm_circle = false;  // Japanese layout, Circle confirms / Cross cancels (DCP_CONFIRM=circle, hle/confirm_button.h)
 };
 
 void load_settings(const std::string& path, Settings& s) {
@@ -138,6 +139,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "net_trace") s.net_trace = v == "1" || v == "true";
         else if (k == "check_updates") s.check_updates = v == "1" || v == "true";
         else if (k == "chat") s.chat = v == "1" || v == "true";
+        else if (k == "confirm") s.confirm_circle = v == "circle";
     }
 }
 
@@ -151,6 +153,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nupnp = " << (s.upnp ? "true" : "false") << "\nnet_trace = " << (s.net_trace ? "true" : "false")
       << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
       << "\nchat = " << (s.chat ? "true" : "false")
+      << "\nconfirm = " << (s.confirm_circle ? "circle" : "cross")
       << "\n";
 }
 
@@ -307,9 +310,11 @@ std::vector<Check> validate_dump(const std::string& dir) {
         }
         std::error_code ec;
         uintmax_t have = std::filesystem::file_size(path(cpk.name), ec);
-        dcp::FileState s = dcp::cpk_state(path(cpk.name), cpk.size);
-        if (s == dcp::FileState::Ok) out.push_back({true, true, std::string(cpk.name) + " found"});
-        else out.push_back({false, true, dcp::cpk_problem(cpk.name, s, have, cpk.size),
+        uintmax_t need = 0;
+        dcp::FileState s = dcp::cpk_state(path(cpk.name), &need);
+        if (s == dcp::FileState::Ok)
+            out.push_back({true, true, std::string(cpk.name) + (have == cpk.size ? " found" : " found (modified: a fan translation or mod)")});
+        else out.push_back({false, true, dcp::cpk_problem(cpk.name, s, have, need),
                             s == dcp::FileState::Truncated ? "[incomplete]" : "[bad file]"});
     }
     // Optional, but the game loads it whenever it is there, so an encrypted copy stops the game.
@@ -478,6 +483,7 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
     set_env(L"DCP_NP_NAME", s.name);
     set_env(L"DCP_UPNP", s.upnp ? "" : "0");
     set_env(L"DCP_CHAT", s.chat ? "" : "0");
+    set_env(L"DCP_CONFIRM", s.confirm_circle ? "circle" : "");
     if (s.net_trace) set_env(L"DCP_NET_TRACE", "1");  // off leaves an inherited DCP_NET_TRACE alone
     BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
                              CREATE_NO_WINDOW | (have_list ? EXTENDED_STARTUPINFO_PRESENT : 0), nullptr, wdir.c_str(),
@@ -1006,7 +1012,11 @@ int main(int argc, char** argv) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     if (!(scale > 0.0f)) scale = 1.0f;
-    SDL_Window* win = SDL_CreateWindow("OpenCrownPC Launcher", int(1040 * scale), int(660 * scale),
+    int win_w = int(1040 * scale), win_h = int(660 * scale);
+    SDL_Rect ub;  // never larger than the screen (small laptop screens at 125-150% scaling)
+    if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &ub) && ub.w > 0 && ub.h > 0)
+        win_w = std::min(win_w, ub.w), win_h = std::min(win_h, ub.h);
+    SDL_Window* win = SDL_CreateWindow("OpenCrownPC Launcher", win_w, win_h,
                                        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
                                            (selftest ? SDL_WINDOW_HIDDEN : 0));
     if (!win) {
@@ -1312,6 +1322,10 @@ int main(int argc, char** argv) {
                 }
                 ImGui::SetNextItemWidth(220 * scale);
                 ImGui::SliderFloat("Fairy speed", &ctl.fairy_speed, 0.1f, 5.0f, "%.2f");
+                ImGui::Checkbox("Japanese layout: Circle confirms, Cross cancels (menus only)", &set.confirm_circle);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The game's own Japanese layout; button prompts follow it. Combat buttons stay the same.\n"
+                                      "Keyboard/mouse: the key bound to Circle confirms. Applies the next time the game starts.");
                 if (ImGui::Button("Reset to defaults")) { ctl = default_controls(); status = "Defaults restored (not saved yet)."; }
                 ImGui::SameLine();
                 if (ImGui::Button("Save")) status = save_controls(input_path, ctl) ? "Saved " + native(input_path)
@@ -1697,8 +1711,10 @@ int main(int argc, char** argv) {
             ImGui::OpenPopup("Save folder");
             ask_saves = false;
         }
-        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.75f, 0), ImGuiCond_Appearing);
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing,
+        // Every frame, not on appearing: it opens on the first frame, while the window manager may still resize the
+        // window (the AppImage catalog test caught it half off-screen).
+        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.75f, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always,
                                 ImVec2(0.5f, 0.5f));
         if (ImGui::BeginPopupModal("Save folder", nullptr, ImGuiWindowFlags_NoResize)) {
             ImGui::TextWrapped("Where should your save files be kept? The game creates a SAVEDATA00 folder inside "

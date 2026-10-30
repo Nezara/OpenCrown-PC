@@ -5,7 +5,9 @@
 // Reconnect (lobby_protocol.md 1.1): when an established link drops, the thread retries for up to kReconnectMs (Lost,
 // then Back once a new socket is open) with ordinary traffic paused; the owner re-sends hello / resume as urgent
 // requests and calls resume_traffic(). Only when every try fails does it report Down. $DCP_LOBBY_RECONNECT=0 turns it
-// off (a drop is Down at once, as before).
+// off (a drop is Down at once, as before). A link counts as dropped when it closes, stays silent for 30 s, or leaves a
+// request unanswered for 10 s. Unanswered requests whose repeat is harmless (room data, search, ...) are sent again
+// after the reconnect instead of failing.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -19,8 +21,9 @@ constexpr int kGameNetVersion = 34;   // game protocol version (packed attr 0x53
 constexpr const char* kDefaultLobbyUrl = "ws://127.0.0.1:47834/";
 
 struct LobbyMessage {
-    // Down = link gone for good (every pending request failed); Lost = dropped, reconnecting (requests already sent
-    // failed, newer ones wait); Back = reconnected, traffic paused until resume_traffic().
+    // Down = link gone for good (every pending request failed); Lost = dropped, reconnecting (unanswered requests
+    // failed, except the resendable ones, which wait with the newer ones); Back = reconnected, traffic paused until
+    // resume_traffic().
     enum Kind { Response, Event, Down, Lost, Back } kind = Event;
     uint32_t rid = 0;     // Response: request id from request()
     int32_t err = 0;      // Response: 0 ok, else a Matching2-style error code (negative int32)
@@ -39,6 +42,8 @@ public:
     uint32_t request(const std::string& op, Json body, bool urgent = false);
     // After Back: lets the paused requests go out (once hello / resume are answered).
     void resume_traffic();
+    // The app is back in front (Android): the next ping must be answered within 5 s, else the link counts as dropped.
+    void check_link();
     // Pops the next incoming message (non-blocking).
     bool poll(LobbyMessage* out);
     bool connected() const;

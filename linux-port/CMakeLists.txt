@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)  # Ubuntu 22.04 stock cmake
 project(OpenCrownLinux C CXX)
-set(OPENCROWN_VERSION "1.0.6")  # Linux build; versioned separately from the Windows build in ../port
+set(OPENCROWN_VERSION "1.0.7")  # Linux build; versioned separately from the Windows build in ../port
 # Updater end-to-end tests build a fake newer release in a separate build dir (packaging/make-appimage.sh, OC_VERSION).
 if(OPENCROWN_VERSION_OVERRIDE)
   set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")
@@ -125,7 +125,7 @@ target_link_libraries(dcp_net PUBLIC Threads::Threads PRIVATE libminiupnpc-stati
 add_library(dcp_hle STATIC src/hle/kernel/pure.cpp src/hle/kernel/memory.cpp src/hle/kernel/thread.cpp
   src/hle/kernel/file.cpp src/hle/kernel/misc.cpp src/hle/services.cpp src/hle/savedata.cpp src/hle/dialogs.cpp
   src/hle/pad.cpp src/hle/audio.cpp src/hle/video.cpp src/hle/gnm.cpp src/hle/font.cpp src/hle/net.cpp src/hle/np.cpp
-  src/hle/matching2.cpp src/hle/net_test.cpp src/hle/skip_offers.cpp src/render/capture.cpp)
+  src/hle/matching2.cpp src/hle/net_test.cpp src/hle/skip_offers.cpp src/hle/confirm_button.cpp src/render/capture.cpp)
 target_include_directories(dcp_hle PUBLIC src)
 target_compile_options(dcp_hle PRIVATE -fno-exceptions)
 target_link_libraries(dcp_hle PUBLIC dcp_loader freetype dcp_texwatch dcp_net Threads::Threads)
@@ -189,7 +189,7 @@ if(DCP_RENDER)
   target_link_libraries(dcp_run PRIVATE dcp_imgui)
 
   add_executable(opencrown_launcher tools/launcher/main.cpp)
-  target_link_libraries(opencrown_launcher PRIVATE dcp_imgui dcp_net)
+  target_link_libraries(opencrown_launcher PRIVATE dcp_imgui dcp_formats dcp_net)
   set_target_properties(opencrown_launcher PROPERTIES OUTPUT_NAME "opencrown-launcher")
   target_compile_definitions(opencrown_launcher PRIVATE OPENCROWN_VERSION="${OPENCROWN_VERSION}")
 endif()

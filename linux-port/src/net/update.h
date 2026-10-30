@@ -38,7 +38,7 @@ struct Release {
 // The API's array of releases. False + *err on bad JSON / wrong shape.
 bool parse_releases(const std::string& json, std::vector<Release>* out, std::string* err);
 
-// OpenCrown-Linux-<ver>-x86_64.AppImage
+// OpenCrown-<ver>-x86_64.AppImage, or the pre-1.0.7 OpenCrown-Linux-<ver>-x86_64.AppImage
 bool is_linux_asset(const std::string& name);
 
 // Release notes as display lines.

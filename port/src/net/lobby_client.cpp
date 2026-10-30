@@ -17,37 +17,53 @@
 namespace dcp::net {
 
 namespace {
-constexpr auto kSilence = std::chrono::seconds(45);  // no frame at all this long (pings every 20 s) = link dead
+using Clock = std::chrono::steady_clock;
+// No frame at all this long (pings every 20 s) = link dead. Under the lobby's 30 s seat grace, so a reconnect can still
+// retake the seat.
+constexpr auto kSilence = std::chrono::seconds(30);
+// A request unanswered this long = link dead, even if pings still come back (the lobby answers within a second).
+// The game waits on some answers before it goes on (e.g. the room data sent when a dungeon starts).
+constexpr auto kAnswerTimeout = std::chrono::seconds(10);
+constexpr auto kProbeTimeout = std::chrono::seconds(5);  // check_link(): the ping it sends must be answered by then
+
+// Requests a reconnect may send again: a repeat does no harm and the game waits on their answers. The others
+// (create / join / leave / chat, hello / resume / endpoint, which the owner re-sends itself) still fail on a drop.
+bool resendable(const std::string& op) {
+    return op == "set_room_internal" || op == "set_room_external" || op == "search" || op == "set_user_info" ||
+           op == "worlds" || op == "friend_list" || op == "set_presence";
 }
+}  // namespace
 
 struct LobbyClient::Impl {
     std::string url;
     std::mutex mu;
-    std::deque<std::string> out;           // encoded JSON texts waiting for the socket
-    std::deque<uint32_t> out_rids;         // rid of each queued text (0 = none), to fail them if the link drops
-    std::deque<std::string> urgent;        // same, sent even while paused (hello / resume after a reconnect)
-    std::deque<uint32_t> urgent_rids;
-    std::deque<uint32_t> inflight;         // sent, awaiting a response
+    struct Item {
+        std::string text;      // encoded JSON
+        uint32_t rid = 0;      // 0 = no response expected
+        bool resend = false;   // sent again after a reconnect instead of failing (resendable())
+        Clock::time_point at;  // when it went out (inflight only)
+    };
+    std::deque<Item> out;                  // waiting for the socket
+    std::deque<Item> urgent;               // same, sent even while paused (hello / resume after a reconnect)
+    std::deque<Item> inflight;             // sent, awaiting a response (oldest first)
     std::deque<LobbyMessage> in;
-    std::atomic<bool> up{false}, dead{false}, stop{false};
+    std::atomic<bool> up{false}, dead{false}, stop{false}, probe{false};
     bool paused = false;                   // after a reconnect, until resume_traffic()
     std::thread th;
     uint32_t next_rid = 1;
     bool started = false;
 
-    void fail_locked(std::deque<uint32_t>& rids) {
-        for (uint32_t rid : rids) {
-            if (!rid) continue;
-            LobbyMessage m;
-            m.kind = LobbyMessage::Response, m.rid = rid, m.err = kErrLobbyDown;
-            in.push_back(std::move(m));
-        }
-        rids.clear();
+    void fail_one_locked(uint32_t rid) {
+        if (!rid) return;
+        LobbyMessage m;
+        m.kind = LobbyMessage::Response, m.rid = rid, m.err = kErrLobbyDown;
+        in.push_back(std::move(m));
     }
-    void fail_pending_locked() {
-        fail_locked(urgent_rids), fail_locked(out_rids), fail_locked(inflight);
-        out.clear(), urgent.clear();
+    void fail_locked(std::deque<Item>& q) {
+        for (const Item& i : q) fail_one_locked(i.rid);
+        q.clear();
     }
+    void fail_pending_locked() { fail_locked(urgent), fail_locked(out), fail_locked(inflight); }
     void push_locked(LobbyMessage::Kind k) {
         LobbyMessage m;
         m.kind = k;
@@ -67,41 +83,53 @@ struct LobbyClient::Impl {
     // One connected socket until it drops; returns why.
     std::string session(ws::Conn& s) {
         ws::Reader rd;
-        auto last_ping = std::chrono::steady_clock::now(), last_rx = last_ping;
+        auto last_ping = Clock::now(), last_rx = last_ping;
+        Clock::time_point probe_from{};  // check_link(): when its ping went out (epoch = none pending)
+        probe = false;                   // a fresh socket needs no check
         for (;;) {
             if (stop) return "stopping";
+            bool stuck = false;
             {  // flush queued requests (urgent first; the rest only when not paused)
-                std::deque<std::string> o;
+                std::deque<Item> o;
                 {
                     std::lock_guard<std::mutex> lk(mu);
                     o.swap(urgent);
-                    for (uint32_t r : urgent_rids)
-                        if (r) inflight.push_back(r);
-                    urgent_rids.clear();
                     if (!paused) {
-                        for (auto& t : out) o.push_back(std::move(t));
-                        for (uint32_t r : out_rids)
-                            if (r) inflight.push_back(r);
-                        out.clear(), out_rids.clear();
+                        for (auto& i : out) o.push_back(std::move(i));
+                        out.clear();
                     }
+                    const auto t = Clock::now();
+                    for (const Item& i : o)
+                        if (i.rid) inflight.push_back(i), inflight.back().at = t;
+                    stuck = !inflight.empty() && t - inflight.front().at > kAnswerTimeout;
                 }
-                for (auto& t : o) {
-                    std::string f = ws::encode_frame(ws::kText, t, true);
+                for (auto& i : o) {
+                    std::string f = ws::encode_frame(ws::kText, i.text, true);
                     if (!s.send_all(f)) return "send failed";
                 }
             }
-            auto now = std::chrono::steady_clock::now();
+            if (stuck) return "a request got no answer for 10 s";
+            auto now = Clock::now();
+            if (probe.exchange(false) && probe_from == Clock::time_point{}) {
+                std::string f = ws::encode_frame(ws::kPing, "", true);
+                s.send_all(f);
+                probe_from = last_ping = now;
+            }
+            if (probe_from != Clock::time_point{}) {
+                if (last_rx >= probe_from) probe_from = {};
+                else if (now - probe_from > kProbeTimeout) return "no answer after the app came back";
+            }
             if (now - last_ping > std::chrono::seconds(20)) {
                 std::string f = ws::encode_frame(ws::kPing, "", true);
                 s.send_all(f);
                 last_ping = now;
             }
-            if (now - last_rx > kSilence) return "no answer for 45 s";
+            if (now - last_rx > kSilence) return "no answer for 30 s";
             if (!s.readable(5)) continue;
             char buf[16384];
             int n = s.recv(buf, sizeof buf);
             if (n <= 0) return n == 0 ? "closed by the server" : "connection lost";
-            last_rx = std::chrono::steady_clock::now();
+            last_rx = Clock::now();
             rd.feed(buf, size_t(n));
             ws::Opcode op;
             std::string payload;
@@ -136,7 +164,7 @@ struct LobbyClient::Impl {
                     std::lock_guard<std::mutex> lk(mu);
                     if (m.kind == LobbyMessage::Response)
                         for (auto it = inflight.begin(); it != inflight.end(); ++it)
-                            if (*it == m.rid) {
+                            if (it->rid == m.rid) {
                                 inflight.erase(it);
                                 break;
                             }
@@ -152,7 +180,7 @@ struct LobbyClient::Impl {
         const bool reconnect = !(e && *e == '0');
         bool ever_up = false;
         int tries = 0;
-        auto deadline = std::chrono::steady_clock::now();
+        auto deadline = Clock::now();
         for (;;) {
             std::string err;
             ws::Conn s;
@@ -163,7 +191,7 @@ struct LobbyClient::Impl {
                 }
                 ++tries;
                 std::fprintf(stderr, "LOBBY reconnect try %d/%d failed: %s\n", tries, kReconnectTries, err.c_str());
-                if (tries >= kReconnectTries || std::chrono::steady_clock::now() >= deadline) {
+                if (tries >= kReconnectTries || Clock::now() >= deadline) {
                     std::fprintf(stderr, "LOBBY gave up reconnecting to %s\n", url.c_str());
                     return give_up();
                 }
@@ -184,15 +212,21 @@ struct LobbyClient::Impl {
             std::fprintf(stderr, "LOBBY disconnected from %s (%s)\n", url.c_str(), why.c_str());
             if (stop) return;
             if (!reconnect) return give_up();
-            {  // requests already sent got no answer; the rest wait for the new socket
+            {  // unanswered requests: the resendable ones go out again first on the new socket (after hello /
+               // resume), the rest fail; queued ones wait for it
                 std::lock_guard<std::mutex> lk(mu);
                 paused = true;
-                fail_locked(inflight);
-                fail_locked(urgent_rids), urgent.clear();  // a hello / resume for the socket that just went
+                size_t again = 0;
+                for (auto it = inflight.rbegin(); it != inflight.rend(); ++it)
+                    if (it->resend) out.push_front(std::move(*it)), ++again;
+                    else fail_one_locked(it->rid);
+                inflight.clear();
+                if (again) std::fprintf(stderr, "LOBBY %zu unanswered request(s) will be sent again\n", again);
+                fail_locked(urgent);  // a hello / resume for the socket that just went
                 push_locked(LobbyMessage::Lost);
             }
             tries = 0;
-            deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kReconnectMs);
+            deadline = Clock::now() + std::chrono::milliseconds(kReconnectMs);
             if (!sleep_ms(250)) return;
         }
     }
@@ -224,8 +258,9 @@ uint32_t LobbyClient::request(const std::string& op, Json body, bool urgent) {
         d_->in.push_back(std::move(m));
         return rid;
     }
-    (urgent ? d_->urgent : d_->out).push_back(body.dump());
-    (urgent ? d_->urgent_rids : d_->out_rids).push_back(rid);
+    Impl::Item it;
+    it.text = body.dump(), it.rid = rid, it.resend = !urgent && resendable(op);
+    (urgent ? d_->urgent : d_->out).push_back(std::move(it));
     if (!d_->started) {
         d_->started = true;
         d_->th = std::thread([this] { d_->run(); });
@@ -244,6 +279,10 @@ bool LobbyClient::poll(LobbyMessage* out) {
     *out = std::move(d_->in.front());
     d_->in.pop_front();
     return true;
+}
+
+void LobbyClient::check_link() {
+    if (d_->up) d_->probe = true;
 }
 
 bool LobbyClient::connected() const { return d_->up; }

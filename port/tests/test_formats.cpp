@@ -20,6 +20,7 @@
 #include "formats/mbs.h"
 #include "formats/mcb.h"
 #include "formats/utf_table.h"
+#include "../tools/common/dump_check.h"
 
 using namespace dcp::formats;
 
@@ -736,6 +737,59 @@ void test_bsb() {
     CHECK(threw);
 }
 
+// @UTF table whose columns are all per-row u64 (cols[i] = name, vals[row][i]).
+std::vector<uint8_t> make_u64_table(const std::string& name, const std::vector<std::string>& cols,
+                                    const std::vector<std::vector<uint64_t>>& vals) {
+    std::string strings = std::string("<NULL>\0", 7) + name + '\0';
+    std::vector<uint32_t> col_off;
+    for (const auto& c : cols) { col_off.push_back(uint32_t(strings.size())); strings += c + '\0'; }
+    std::vector<uint8_t> schema, rows;
+    for (uint32_t o : col_off) { schema.push_back(0x56); put32(schema, o); }
+    for (const auto& r : vals) for (uint64_t v : r) { put32(rows, uint32_t(v >> 32)); put32(rows, uint32_t(v)); }
+    uint32_t rows_off = 24 + uint32_t(schema.size()), str_off = rows_off + uint32_t(rows.size());
+    std::vector<uint8_t> body;
+    put16(body, 0); put16(body, uint16_t(rows_off));
+    put32(body, str_off); put32(body, str_off + uint32_t(strings.size())); put32(body, 7);
+    put16(body, uint16_t(cols.size())); put16(body, uint16_t(cols.size() * 8)); put32(body, uint32_t(vals.size()));
+    body.insert(body.end(), schema.begin(), schema.end());
+    body.insert(body.end(), rows.begin(), rows.end());
+    body.insert(body.end(), strings.begin(), strings.end());
+    std::vector<uint8_t> t = {'@', 'U', 'T', 'F'};
+    put32(t, uint32_t(body.size()));
+    t.insert(t.end(), body.begin(), body.end());
+    return t;
+}
+
+// Launcher dump check (tools/common/dump_check.h): a CPK passes when its TOC entries fit, whatever its size.
+void test_cpk_state() {
+    auto packet = [](std::vector<uint8_t>& f, size_t off, const char* magic, const std::vector<uint8_t>& utf) {
+        if (f.size() < off + 16 + utf.size()) f.resize(off + 16 + utf.size());
+        std::memcpy(&f[off], magic, 4);
+        for (int i = 0; i < 4; ++i) f[off + 8 + i] = uint8_t(utf.size() >> (8 * i));
+        std::copy(utf.begin(), utf.end(), f.begin() + off + 16);
+    };
+    // Header -> TOC at 0x800, content at 0x1000; one entry at base(0x800)+0x800, 0x100 bytes: needs 0x1100.
+    std::vector<uint8_t> img;
+    packet(img, 0, "CPK ", make_u64_table("CpkHeader", {"TocOffset", "ContentOffset"}, {{0x800, 0x1000}}));
+    packet(img, 0x800, "TOC ", make_u64_table("CpkToc", {"FileOffset", "FileSize"}, {{0x800, 0x100}}));
+    img.resize(0x1100, 0xAA);
+    const auto path = std::filesystem::temp_directory_path() / "dcp_test_cpk_state.cpk";
+    auto state = [&](size_t len, uintmax_t* need = nullptr) {
+        std::ofstream(path, std::ios::binary | std::ios::trunc).write(reinterpret_cast<const char*>(img.data()), std::streamsize(len));
+        return dcp::cpk_state(path, need);
+    };
+    uintmax_t need = 0;
+    CHECK(state(0x1100, &need) == dcp::FileState::Ok && need == 0x1100);
+    img.resize(0x1800);
+    CHECK(state(0x1800) == dcp::FileState::Ok);  // padded / re-packed: any size that holds the entries
+    CHECK(state(0x10F0, &need) == dcp::FileState::Truncated && need == 0x1100);
+    CHECK(state(0x810, &need) == dcp::FileState::Truncated && need == 0);  // cut inside the TOC packet
+    CHECK(state(8) == dcp::FileState::Truncated);
+    img[0] = 'X';
+    CHECK(state(0x1100) == dcp::FileState::WrongKind);
+    std::filesystem::remove(path);
+}
+
 }  // namespace
 
 int main() {
@@ -757,6 +811,7 @@ int main() {
     test_mbs();
     test_mcb();
     test_bsb();
+    test_cpk_state();
     std::printf(failures ? "FAILED (%d)\n" : "all tests passed\n", failures);
     return failures ? 1 : 0;
 }

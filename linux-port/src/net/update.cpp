@@ -96,7 +96,9 @@ bool parse_releases(const std::string& text, std::vector<Release>* out, std::str
 }
 
 bool is_linux_asset(const std::string& n) {
-    const std::string pre = "OpenCrown-Linux-", suf = "-x86_64.AppImage";
+    // "OpenCrown-<ver>-x86_64.AppImage" since 1.0.7 (the AppImage catalog wants no "Linux" in the name); also the
+    // older "OpenCrown-Linux-<ver>-...", which releases keep uploading for players still on 1.0.6 and earlier.
+    const std::string pre = "OpenCrown-", suf = "-x86_64.AppImage";
     return n.size() > pre.size() + suf.size() && n.compare(0, pre.size(), pre) == 0 &&
            n.compare(n.size() - suf.size(), suf.size(), suf) == 0;
 }

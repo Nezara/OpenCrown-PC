@@ -161,6 +161,7 @@ struct Settings {
     bool upnp = true;
     bool check_updates = true;  // start-up update check (Update page)
     bool chat = true;  // room text chat (net/chat.h); off = DCP_CHAT=0, nothing sent or shown
+    bool confirm_circle = false;  // Japanese layout, Circle confirms / Cross cancels (DCP_CONFIRM=circle, hle/confirm_button.h)
 };
 
 void load_settings(const std::string& path, Settings& s) {
@@ -185,6 +186,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "upnp") s.upnp = v == "1" || v == "true";
         else if (k == "check_updates") s.check_updates = !(v == "0" || v == "false");
         else if (k == "chat") s.chat = v == "1" || v == "true";
+        else if (k == "confirm") s.confirm_circle = v == "circle";
     }
 }
 
@@ -197,6 +199,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nheight = " << s.height << "\nlanguage = " << s.language << "\nlobby = " << s.lobby << "\nname = " << s.name
       << "\nupnp = " << (s.upnp ? "true" : "false") << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
       << "\nchat = " << (s.chat ? "true" : "false")
+      << "\nconfirm = " << (s.confirm_circle ? "circle" : "cross")
       << "\n";
 }
 
@@ -381,9 +384,11 @@ std::vector<Check> validate_dump(const std::string& dir) {
         }
         std::error_code ec;
         uintmax_t have = std::filesystem::file_size(p, ec);
-        dcp::FileState s = dcp::cpk_state(p, cpk.size);
-        if (s == dcp::FileState::Ok) out.push_back({true, true, std::string(cpk.name) + " found"});
-        else out.push_back({false, true, dcp::cpk_problem(cpk.name, s, have, cpk.size),
+        uintmax_t need = 0;
+        dcp::FileState s = dcp::cpk_state(p, &need);
+        if (s == dcp::FileState::Ok)
+            out.push_back({true, true, std::string(cpk.name) + (have == cpk.size ? " found" : " found (modified: a fan translation or mod)")});
+        else out.push_back({false, true, dcp::cpk_problem(cpk.name, s, have, need),
                             s == dcp::FileState::Truncated ? "[incomplete]" : "[bad file]"});
     }
     // Optional, but the game loads it whenever it is there, so an encrypted copy stops the game.
@@ -469,6 +474,7 @@ bool start_game(Game& g, const Settings& s, const std::string& user, const std::
     set_env("DCP_NP_NAME", s.name);
     set_env("DCP_UPNP", s.upnp ? "" : "0");
     set_env("DCP_CHAT", s.chat ? "" : "0");
+    set_env("DCP_CONFIRM", s.confirm_circle ? "circle" : "");
 
     // stdin /dev/null, stdout + stderr to the log; nothing else inherited (no sockets of a friends / bug-report
     // session running at the time). Working dir = the launcher's folder, like on Windows.
@@ -1611,7 +1617,8 @@ int main(int argc, char** argv) {
     if (const char* s = std::getenv("DCP_LAUNCHER_SCALE"); s && *s) deck = std::clamp(std::strtof(s, nullptr), 0.5f, 4.0f);
     int win_w = int(1040 * scale * deck), win_h = int(660 * scale * deck);
     SDL_Rect ub;
-    if ((gm || deck != 1.0f) && SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &ub) && ub.w > 0 && ub.h > 0) {
+    // Never larger than the screen: without a window manager (or one that doesn't clamp) the rest is off-screen.
+    if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &ub) && ub.w > 0 && ub.h > 0) {
         if (gm) win_w = ub.w, win_h = ub.h;
         win_w = std::min(win_w, ub.w), win_h = std::min(win_h, ub.h);
     }
@@ -2062,6 +2069,10 @@ int main(int argc, char** argv) {
                 page_entry();
                 ImGui::Checkbox("Touch screen moves the fairy (tap = interact)", &ctl.touch_screen);
                 ImGui::Checkbox("Steam Deck trackpads: right = fairy, left click = town map", &ctl.deck_trackpads);
+                ImGui::Checkbox("Japanese layout: Circle confirms, Cross cancels (menus only)", &set.confirm_circle);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The game's own Japanese layout; button prompts follow it. Combat buttons stay the same.\n"
+                                      "Keyboard/mouse: the key bound to Circle confirms. Applies the next time the game starts.");
                 {
                     static const char* const kClicks[] = {"Auto (Steam Deck Game Mode)", "Always", "Never"};
                     static const char* const kAttack[] = {"Auto (not on a Steam Deck)", "Always", "Never"};
@@ -2493,8 +2504,10 @@ int main(int argc, char** argv) {
             ImGui::OpenPopup("Save folder");
             ask_saves = false;
         }
-        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.75f, 0), ImGuiCond_Appearing);
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing,
+        // Every frame, not on appearing: it opens on the first frame, while the window manager may still resize the
+        // window (the AppImage catalog test caught it half off-screen).
+        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.75f, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always,
                                 ImVec2(0.5f, 0.5f));
         if (ImGui::BeginPopupModal("Save folder", nullptr, ImGuiWindowFlags_NoResize)) {
             ImGui::TextWrapped("Where should your save files be kept? The game creates a SAVEDATA00 folder inside "

@@ -169,7 +169,7 @@ On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating
 
 **Playing.** A controller works like on a Vita, and its buttons can be changed on the **Controls** page. Without a controller, use the on-screen controls; touching the screen moves the fairy pointer. In town, tapping the screen opens the Town Map: that's how the Vita version works. Online play (the **Online** page) uses the same lobby as OpenCrown PC and starts at the stables in town.
 
-Saves, settings and `log.txt` live in `Internal storage/OpenCrown/`. More details in [`android-port/README.md`](android-port/README.md).
+Saves, settings and `log.txt` live in `Internal storage/OpenCrown/`.
 
 ## The launcher
 
@@ -301,7 +301,7 @@ That gives you `OpenCrownPC Launcher.exe`, `dcp_run.exe` and `SDL3.dll` in `port
 
 **Linux:** the Linux build lives in [`linux-port/`](linux-port) (Ubuntu 22.04 or newer: install the packages listed in [`linux-port/README.md`](linux-port/README.md), then run `./build.sh`; `sh packaging/make-appimage.sh` makes the AppImage).
 
-**Android (beta):** OpenCrown Mobile lives in [`android-port/`](android-port). It runs the game's PS Vita version from your own Vita dump and plays online with OpenCrown PC; see [`android-port/README.md`](android-port/README.md).
+**Android (beta):** OpenCrown Mobile's source isn't public. The APK is on the [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) page.
 
 The lobby server builds and tests separately with Node.js; see [`server/lobby-worker/README.md`](server/lobby-worker/README.md).
 
@@ -317,7 +317,6 @@ The lobby server builds and tests separately with Node.js; see [`server/lobby-wo
 | `port/tools` | The launcher, `dcp_run` and developer tools |
 | `port/tests` | Unit tests (synthetic data only, no game files) |
 | `linux-port` | The Linux / Steam Deck build (its own copy of the above, adapted for Linux) and its AppImage packaging |
-| `android-port` | OpenCrown Mobile for Android (beta): the PS Vita version under an ARM JIT, Vulkan renderer, Android launcher |
 | `server/lobby-worker` | The lobby server (Cloudflare Worker, TypeScript) |
 | `notes/map` | Reverse-engineering notes on how the game's systems work |
 

@@ -204,6 +204,8 @@ public:
 
     void update(SDL_Window* win) override {
         dcp::hle::PadState s[4];
+        // OS cursor hidden while playing; shown for text boxes.
+        if (blocked_ == cursor_hidden_) cursor_hidden_ = !blocked_, cursor_hidden_ ? SDL_HideCursor() : SDL_ShowCursor();
         if (blocked_) {
             if (rel_) SDL_SetWindowRelativeMouseMode(win, false), rel_ = false;
             std::lock_guard<std::mutex> lk(mu_);
@@ -443,7 +445,7 @@ private:
     bool native_touch_ = false, mouse_finger_ = false;
     const bool gamescope_ = under_gamescope();
     const bool mouse_attacks_ = g_mouse_attacks == dcp::touch::Tri::Auto ? !on_steam_deck() : g_mouse_attacks == dcp::touch::Tri::On;
-    bool fairy_on_ = false, toggle_was_ = false, rel_ = false;
+    bool fairy_on_ = false, toggle_was_ = false, rel_ = false, cursor_hidden_ = false;
     std::atomic<bool> blocked_{false};  // ImeBox open (set on the render loop, read by the game thread too)
     uint64_t look_ms_ = 0;  // SDL_GetTicks when a look key was last held (pointer_tap window)
     bool finger_ = false, lift_ = false, lift_seen_ = false;  // lift_*: guarded by mu_

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(DragonsCrownPort C CXX)
-set(OPENCROWN_VERSION "1.0.7")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
+set(OPENCROWN_VERSION "1.0.8")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
 # Test builds only (updater end-to-end test): -DOPENCROWN_VERSION_OVERRIDE=9.9.9. Never for a release.
 set(OPENCROWN_VERSION_OVERRIDE "" CACHE STRING "Override OPENCROWN_VERSION (updater tests only)")
 if(OPENCROWN_VERSION_OVERRIDE)
@@ -104,6 +104,7 @@ add_library(dcp_hle STATIC src/hle/kernel/pure.cpp src/hle/kernel/memory.cpp src
 target_include_directories(dcp_hle PUBLIC src)
 target_compile_options(dcp_hle PRIVATE -fno-exceptions)
 target_link_libraries(dcp_hle PUBLIC dcp_loader winmm freetype dcp_texwatch dcp_net)
+target_sources(dcp_hle PRIVATE src/hle/own_camera.cpp)
 
 # Optional viewer (SDL3 + OpenGL 3.3). Point DCP_SDL3_DIR at an SDL3 MinGW dev tree (x86_64-w64-mingw32); skipped if absent.
 set(DCP_SDL3_DIR "" CACHE PATH "SDL3 prefix (contains lib/cmake/SDL3)")

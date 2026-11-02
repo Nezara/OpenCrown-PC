@@ -113,6 +113,7 @@ struct Settings {
     bool net_trace = false;  // DCP_NET_TRACE=1: online session trace in last_run.log (hle/net_trace.h), diagnostics
     bool check_updates = true;  // ask GitHub for a newer launcher at start
     bool chat = true;  // room text chat (net/chat.h); off = DCP_CHAT=0, nothing sent or shown
+    bool own_camera = true;  // separate cameras online
     bool confirm_circle = false;  // Japanese layout, Circle confirms / Cross cancels (DCP_CONFIRM=circle, hle/confirm_button.h)
 };
 
@@ -139,6 +140,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "net_trace") s.net_trace = v == "1" || v == "true";
         else if (k == "check_updates") s.check_updates = v == "1" || v == "true";
         else if (k == "chat") s.chat = v == "1" || v == "true";
+        else if (k == "own_camera") s.own_camera = v == "1" || v == "true";
         else if (k == "confirm") s.confirm_circle = v == "circle";
     }
 }
@@ -153,6 +155,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nupnp = " << (s.upnp ? "true" : "false") << "\nnet_trace = " << (s.net_trace ? "true" : "false")
       << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
       << "\nchat = " << (s.chat ? "true" : "false")
+      << "\nown_camera = " << (s.own_camera ? "true" : "false")
       << "\nconfirm = " << (s.confirm_circle ? "circle" : "cross")
       << "\n";
 }
@@ -483,6 +486,7 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
     set_env(L"DCP_NP_NAME", s.name);
     set_env(L"DCP_UPNP", s.upnp ? "" : "0");
     set_env(L"DCP_CHAT", s.chat ? "" : "0");
+    set_env(L"DCP_OWN_CAMERA", s.own_camera ? "" : "0");
     set_env(L"DCP_CONFIRM", s.confirm_circle ? "circle" : "");
     if (s.net_trace) set_env(L"DCP_NET_TRACE", "1");  // off leaves an inherited DCP_NET_TRACE alone
     BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
@@ -1429,6 +1433,13 @@ int main(int argc, char** argv) {
                 ImGui::Checkbox("Room text chat", &set.chat);
                 ImGui::SameLine();
                 ImGui::TextColored(kDim, "the chat key (Controls) in an online room; /mute <name> in chat");
+                ImGui::Checkbox("Separate cameras when I host", &set.own_camera);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Online adventures: each player's screen follows their own character, and everyone\n"
+                                      "is held at a fight until its enemies are defeated. The host's setting counts for the\n"
+                                      "whole room; a player on an older version keeps everyone on one camera.");
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "each player's screen follows their own character");
                 ImGui::Checkbox("Net trace (online diagnostics in the log)", &set.net_trace);
                 ImGui::SameLine();
                 ImGui::TextColored(kDim, "only when asked for a bug report; bigger log");

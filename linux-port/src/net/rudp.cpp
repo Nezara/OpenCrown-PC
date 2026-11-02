@@ -5,6 +5,7 @@
 
 #include "net/stun.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <condition_variable>
@@ -36,6 +37,7 @@ struct SockSink final : CarrierSink {
     void on_connected(ConnId) override;
     void on_message(ConnId, const uint8_t*, size_t) override;
     void on_closed(ConnId, CloseReason) override;
+    void on_side(ConnId, const uint8_t*, size_t) override;
 };
 
 struct Sock {
@@ -62,6 +64,13 @@ Ctx* ctx_for(int32_t sock, ConnId c) {
     return it == g_ctx.end() ? nullptr : &it->second;
 }
 
+int32_t s_ctx_of(int32_t sock, ConnId c) {
+    auto s = g_socks.find(sock);
+    if (s == g_socks.end()) return -1;
+    auto m = s->second.conn_ctx.find(c);
+    return m == s->second.conn_ctx.end() ? -1 : m->second;
+}
+
 void SockSink::on_connected(ConnId c) {
     std::lock_guard<std::mutex> lk(g_mu);
     if (Ctx* x = ctx_for(sock, c); x && x->st == CtxState::Connecting) {
@@ -79,6 +88,17 @@ void SockSink::on_message(ConnId c, const uint8_t* d, size_t n) {
     }
     g_cv.notify_all();
 }
+std::atomic<SideHandler> g_side_handler{nullptr};
+
+void SockSink::on_side(ConnId c, const uint8_t* d, size_t n) {
+    int32_t ctx = -1;
+    {
+        std::lock_guard<std::mutex> lk(g_mu);
+        if (Ctx* x = ctx_for(sock, c); x && x->st == CtxState::Connected) ctx = s_ctx_of(sock, c);
+    }
+    if (SideHandler h = g_side_handler.load(); h && ctx >= 0) h(ctx, d, n);  // outside the Rudp lock
+}
+
 void SockSink::on_closed(ConnId c, CloseReason why) {
     std::lock_guard<std::mutex> lk(g_mu);
     if (Ctx* x = ctx_for(sock, c)) {
@@ -229,6 +249,25 @@ int32_t write(int32_t ctx, const void* buf, size_t len) {
     if (x.tx_msgs++ == 0) std::fprintf(stderr, "RUDP ctx %d first message out (%zu bytes)\n", ctx, len);
     x.tx_bytes += len;
     return int32_t(len);
+}
+
+void set_side_handler(SideHandler h) { g_side_handler.store(h); }
+
+int side_broadcast(const void* buf, size_t len) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    int sent = 0;
+    for (auto& [id, x] : g_ctx) {
+        if (x.st != CtxState::Connected) continue;
+        if (Carrier* c = carrier_of(x); c && c->send_side(x.conn, static_cast<const uint8_t*>(buf), len)) ++sent;
+    }
+    return sent;
+}
+
+int side_peers() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    int n = 0;
+    for (auto& [id, x] : g_ctx) n += x.st == CtxState::Connected;
+    return n;
 }
 
 int32_t terminate(int32_t ctx) {

@@ -5,6 +5,7 @@
 //   DATA 3: u32 seq | u8 flags (bit0 = last fragment of a message) | payload (<= kFragment bytes)
 //   ACK 4: u32 next expected seq | u32 bitmap (bit i = seq next+1+i received)
 //   FIN 5, PING 6 (keepalive): no payload
+//   SIDE 7: payload = one side datagram (Carrier::send_side), unreliable; older builds drop it
 // Connections are keyed by (peer ip, peer UDP port, Rudp port; both ends use the same Rudp port). A session nonce per
 // connect() detects a restarted peer (SYN with a new session while connected = reset).
 #pragma once

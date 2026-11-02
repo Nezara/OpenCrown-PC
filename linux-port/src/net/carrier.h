@@ -32,6 +32,8 @@ struct CarrierSink {
     virtual void on_connected(ConnId) = 0;
     virtual void on_message(ConnId, const uint8_t* data, size_t len) = 0;
     virtual void on_closed(ConnId, CloseReason) = 0;
+    // A side datagram (Carrier::send_side) from a connected peer; not part of the message stream.
+    virtual void on_side(ConnId, const uint8_t* data, size_t len) { (void)data, (void)len; }
 };
 
 class Carrier {
@@ -43,6 +45,9 @@ public:
     // Queue one message (reliable, ordered, boundaries preserved). Allowed while Connecting (sent once connected).
     // False if the connection is closed or unknown.
     virtual bool send(ConnId, const uint8_t* data, size_t len) = 0;
+    // Unreliable small datagram beside the message stream. False if not connected / too big / unsupported.
+    static constexpr size_t kSideMax = 512;
+    virtual bool send_side(ConnId, const uint8_t* data, size_t len) { return (void)data, (void)len, false; }
     // Bytes accepted by send() and not yet acknowledged by the peer.
     virtual size_t queued_bytes(ConnId) = 0;
     virtual LinkState state(ConnId) = 0;

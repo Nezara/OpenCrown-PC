@@ -63,6 +63,7 @@ void setup_imgui() {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;  // the cursor is SdlInput's (hidden while playing)
     ImGui::StyleColorsDark();
     ImGuiStyle& st = ImGui::GetStyle();
     st.WindowRounding = 8, st.FrameRounding = 5, st.WindowPadding = ImVec2(22, 18), st.FramePadding = ImVec2(10, 7);

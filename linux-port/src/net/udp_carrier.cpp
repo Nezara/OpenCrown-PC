@@ -28,7 +28,7 @@ namespace {
 
 constexpr uint16_t kMagic = 0x4344;
 constexpr uint8_t kVersion = 1;
-enum : uint8_t { kSyn = 1, kSynAck = 2, kData = 3, kAck = 4, kFin = 5, kPing = 6 };
+enum : uint8_t { kSyn = 1, kSynAck = 2, kData = 3, kAck = 4, kFin = 5, kPing = 6, kSide = 7 };
 constexpr size_t kHeader = 12;
 constexpr size_t kFragment = 1200;        // payload per DATA datagram (stays under common path MTUs)
 constexpr size_t kMaxMessage = 4u << 20;  // reassembly cap
@@ -98,7 +98,7 @@ struct Conn {
 };
 
 struct Event {
-    enum Kind { Connected, Message, Closed } kind;
+    enum Kind { Connected, Message, Closed, Side } kind;
     ConnId id;
     CloseReason reason = CloseReason::Local;
     std::vector<uint8_t> data;
@@ -159,6 +159,17 @@ public:
             off += n;
         } while (off < len);
         if (c.st == LinkState::Connected) pump_send(c, now_ms());
+        return true;
+    }
+
+    bool send_side(ConnId id, const uint8_t* data, size_t len) override {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = conns_.find(id);
+        if (it == conns_.end() || it->second.st != LinkState::Connected || len > kSideMax) return false;
+        uint8_t b[kHeader + kSideMax];
+        header(b, it->second, kSide);
+        std::memcpy(b + kHeader, data, len);
+        raw_send(it->second, b, kHeader + len);
         return true;
     }
 
@@ -492,7 +503,8 @@ private:
             break;
         }
         case kFin: close(*c, CloseReason::PeerClosed, ev); break;
-        default: break;  // kPing: keepalive only
+        case kSide: ev.push_back({Event::Side, c->id, CloseReason::Local, std::vector<uint8_t>(b + kHeader, b + n)}); break;
+        default: break;  // kPing: keepalive only; unknown types (newer peers) are dropped
         }
     }
 
@@ -613,6 +625,7 @@ private:
             for (auto& e : ev) {
                 if (e.kind == Event::Connected) sink_->on_connected(e.id);
                 else if (e.kind == Event::Message) sink_->on_message(e.id, e.data.data(), e.data.size());
+                else if (e.kind == Event::Side) sink_->on_side(e.id, e.data.data(), e.data.size());
                 else sink_->on_closed(e.id, e.reason);
             }
         }

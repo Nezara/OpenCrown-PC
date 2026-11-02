@@ -42,6 +42,12 @@ int32_t initiate(int32_t ctx, const PeerAddr& peer);
 int32_t read(int32_t ctx, void* buf, size_t len);
 int32_t write(int32_t ctx, const void* buf, size_t len);
 int32_t terminate(int32_t ctx);
+
+// Side datagrams (Carrier::send_side). side_broadcast returns the number of peers it went to.
+using SideHandler = void (*)(int32_t ctx, const uint8_t* data, size_t len);
+void set_side_handler(SideHandler h);  // nullptr = none
+int side_broadcast(const void* buf, size_t len);
+int side_peers();  // connected contexts (the peers side_broadcast would try)
 int32_t poll_create(int32_t size);
 int32_t poll_destroy(int32_t poll);
 int32_t poll_control(int32_t poll, int32_t op, int32_t ctx, uint16_t events);

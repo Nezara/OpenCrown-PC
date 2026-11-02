@@ -227,6 +227,18 @@ static void test_rudp() {
     CHECK(g_rxa.size() == size_t(kN) && g_rxb.size() == size_t(kN));
     for (int i = 0; i < kN && i < int(g_rxb.size()); ++i) CHECK(g_rxb[i] == pattern(msg_size(i), i));
     for (int i = 0; i < kN && i < int(g_rxa.size()); ++i) CHECK(g_rxa[i] == pattern(msg_size(i + 3), 777 + i));
+    // Side datagrams: each connected peer gets the broadcast, tagged with its own context; the game stream is untouched.
+    static std::atomic<int> side_a{0}, side_b{0};
+    side_a = side_b = 0;
+    rudp::set_side_handler([](int32_t ctx, const uint8_t* d, size_t n) {
+        if (n == 4 && std::memcmp(d, "LOCK", 4) == 0) ++(ctx == g_ca ? side_a : side_b);
+    });
+    CHECK(rudp::side_broadcast("LOCK", 4) == 2);
+    CHECK(wait_until(1000, [&] { return side_a > 0 && side_b > 0; }));
+    std::vector<uint8_t> big(Carrier::kSideMax + 1);
+    CHECK(rudp::side_broadcast(big.data(), big.size()) == 0);
+    CHECK(rudp::read(g_ca, buf.data(), buf.size()) == rudp::kErrWouldBlock);
+    rudp::set_side_handler(nullptr);
     // Close: a terminates; b sees ERROR (8), Read gives kErrClosed, and Terminate cleans up (as RudpMgr_Pump).
     CHECK(rudp::poll_control(poll, rudp::kPollRemove, g_ca, 0) == 0);
     CHECK(rudp::terminate(g_ca) == 0);

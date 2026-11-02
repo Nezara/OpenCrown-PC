@@ -161,6 +161,7 @@ struct Settings {
     bool upnp = true;
     bool check_updates = true;  // start-up update check (Update page)
     bool chat = true;  // room text chat (net/chat.h); off = DCP_CHAT=0, nothing sent or shown
+    bool own_camera = true;  // separate cameras online
     bool confirm_circle = false;  // Japanese layout, Circle confirms / Cross cancels (DCP_CONFIRM=circle, hle/confirm_button.h)
 };
 
@@ -186,6 +187,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "upnp") s.upnp = v == "1" || v == "true";
         else if (k == "check_updates") s.check_updates = !(v == "0" || v == "false");
         else if (k == "chat") s.chat = v == "1" || v == "true";
+        else if (k == "own_camera") s.own_camera = v == "1" || v == "true";
         else if (k == "confirm") s.confirm_circle = v == "circle";
     }
 }
@@ -199,6 +201,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nheight = " << s.height << "\nlanguage = " << s.language << "\nlobby = " << s.lobby << "\nname = " << s.name
       << "\nupnp = " << (s.upnp ? "true" : "false") << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
       << "\nchat = " << (s.chat ? "true" : "false")
+      << "\nown_camera = " << (s.own_camera ? "true" : "false")
       << "\nconfirm = " << (s.confirm_circle ? "circle" : "cross")
       << "\n";
 }
@@ -474,6 +477,7 @@ bool start_game(Game& g, const Settings& s, const std::string& user, const std::
     set_env("DCP_NP_NAME", s.name);
     set_env("DCP_UPNP", s.upnp ? "" : "0");
     set_env("DCP_CHAT", s.chat ? "" : "0");
+    set_env("DCP_OWN_CAMERA", s.own_camera ? "" : "0");
     set_env("DCP_CONFIRM", s.confirm_circle ? "circle" : "");
 
     // stdin /dev/null, stdout + stderr to the log; nothing else inherited (no sockets of a friends / bug-report
@@ -2187,6 +2191,13 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 ImGui::TextColored(kDim, gm || env_on("SteamDeck") ?"double tap the screen and hold in an online room; /mute <name> in chat"
                                                  : "the chat key (Controls) in an online room; /mute <name> in chat");
+                ImGui::Checkbox("Separate cameras when I host", &set.own_camera);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Online adventures: each player's screen follows their own character, and everyone\n"
+                                      "is held at a fight until its enemies are defeated. The host's setting counts for the\n"
+                                      "whole room; a player on an older version keeps everyone on one camera.");
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "each player's screen follows their own character");
                 bool testing;
                 {
                     std::lock_guard<std::mutex> lk(conn.mu);

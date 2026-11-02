@@ -58,6 +58,9 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 - 🔄 **Dynamic button prompts.** On-screen prompts switch between PlayStation buttons and your keyboard / mouse keys, following whichever you used last, and show your own bindings.
 - 💾 **PS4/PS5-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4/PS5 progress over and take it back.
 - 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with room codes, friend codes and **room text chat**.
+- 🎥 **Separate cameras online** *(new in 1.0.8)*. In online adventures each player's screen follows their own character, and fights hold the party together until the enemies are beaten. Works on Windows, Linux and Android. ([details](#separate-cameras))
+- 🌍 **Fan translations and mods.** Modified game archives (for example a fan translation) are accepted.
+- 🇯🇵 **Japanese button layout** option: Circle confirms and Cross cancels in menus.
 - ⏭️ **Optional story and tutorial skip** on new characters (details [below](#what-is-changed-in-the-game)).
 - 🪟 **Launcher** for your dump, saves, controls, display, online settings and bug reports.
 - 🔄 **Built-in updates.** The launcher tells you when a new version is out, shows what changed and installs it with one click.
@@ -108,9 +111,11 @@ Your dump is only ever **read**. OpenCrown never writes to it or modifies it; th
 
 ## Getting started
 
+All downloads are on **[opencrown.net](https://opencrown.net)** and on the [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) page.
+
 ### Windows
 
-1. **Download** the latest `OpenCrownPC-*-win64.zip` from [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest).
+1. **Download** the latest `OpenCrownPC-*-win64.zip` from [opencrown.net](https://opencrown.net) or [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest).
 2. **Unzip** it anywhere, for example `C:\Games\OpenCrownPC`. Keep the three files together: `OpenCrownPC Launcher.exe`, `dcp_run.exe` and `SDL3.dll`.
 3. **Run `OpenCrownPC Launcher.exe`.** Windows SmartScreen may warn you because the program isn't code-signed (it's a hobby project). Click *More info → Run anyway*.
 4. On the **Game** page, **browse to your dump folder** (the one containing `eboot.bin`). The launcher checks the folder and tells you if anything is missing.
@@ -167,7 +172,9 @@ On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating
 
 **Saves.** On the **Save Folder** page, **Import PC save** brings in a save from OpenCrown on PC (`Documents\Dragons Crown Pro\saves\SAVEDATA00\SAVE0.DAT`; your current save is backed up first), and **Export save** sends your Mobile save wherever you pick (Downloads, a USB stick, Google Drive, ...) to put into that same folder on the PC. No conversion is needed either way.
 
-**Playing.** A controller works like on a Vita, and its buttons can be changed on the **Controls** page. Without a controller, use the on-screen controls; touching the screen moves the fairy pointer. In town, tapping the screen opens the Town Map: that's how the Vita version works. Online play (the **Online** page) uses the same lobby as OpenCrown PC and starts at the stables in town.
+**Playing.** A controller works like on a Vita, and its buttons can be changed on the **Controls** page. Without a controller, use the on-screen controls; touching the screen moves the fairy pointer.
+
+**On-screen controls** *(new in 0.1.6)*. On the **Controls** page you can set their **opacity** and **size**, and choose a **floating stick** that centres where your thumb lands. **Edit touch layout** lets you drag and resize each group of buttons (you can also open the editor in game by holding **Select + Start** on the touch controls for 2 seconds). **Reset touch layout** puts everything back. In town, tapping the screen opens the Town Map: that's how the Vita version works. Online play (the **Online** page) uses the same lobby as OpenCrown PC and starts at the stables in town.
 
 Saves, settings and `log.txt` live in `Internal storage/OpenCrown/`.
 
@@ -178,9 +185,9 @@ The launcher is a small window with a sidebar. Once your dump is set, it uses th
 | Page | What it does |
 |---|---|
 | **Game** | Choose and check your dump folder, then press **Play**. The game starts in its own window; the launcher writes everything it prints to `logs\last_run.log`. |
-| **Controls** | Rebind every keyboard and mouse action and adjust the fairy pointer speed. Saved to `input.ini`, which you can also edit by hand. Delete it to restore the defaults. |
+| **Controls** | Rebind every keyboard and mouse action and adjust the fairy pointer speed (saved to `input.ini`, which you can also edit by hand; delete it to restore the defaults). Also the **Japanese button layout** option: Circle confirms, Cross cancels in menus. |
 | **Display** | Windowed or borderless fullscreen, window size, **4K rendering** (PS4 Pro mode), and the game **language** (English, French, Spanish, German, Italian, from the game's own files). |
-| **Online** | Your online name, your **friend code**, adding friends by code, incoming and outgoing friend requests, UPnP, a connection test and the lobby server address. |
+| **Online** | Your online name, your **friend code**, adding friends by code, incoming and outgoing friend requests, UPnP, room text chat, **Separate cameras when I host**, a connection test and the lobby server address. |
 | **Save Folder** | Where your saves live. Point it at a folder with a `SAVEDATA00` from your PS4/PS5 to keep playing your console progress. |
 | **Report a Bug** | Sends a short note, your OS name and version, and the end of your last log, so problems can be fixed. You can **preview** exactly what is sent first. See [Privacy](#privacy). |
 | **Update** | At the bottom left. Shows whether a new version is out and what it fixes; **Download and install** updates OpenCrown in place (the download is checked against its SHA-256 first). The automatic check at start can be switched off there. |
@@ -203,6 +210,8 @@ Gamepads work out of the box with the PS4 layout. Keyboard and mouse defaults ar
 
 **The fairy pointer:** hold the middle mouse button and move the mouse to steer Rannie's fairy to treasure, doors and runes. Press **E** to tap while pointing. Mouse attacks are paused while you hold it. If you'd rather not hold a button, you can set an on/off key.
 
+**Mouse cursor:** the Windows / Linux cursor is hidden over the game window while you play (the fairy is your pointer), and comes back for text boxes such as name entry and chat.
+
 **Button prompts follow you:** the game's on-screen prompts ("Press ✕", "Press TOUCHPAD to open Town Map" and so on) show PlayStation buttons while you use a gamepad. As soon as you touch the keyboard or mouse they switch to key caps and mouse icons labelled with your current bindings, and they switch back when you pick the pad up again. The key and mouse icons are OpenCrown's own drawings; the renderer swaps them in for the game's button sprites.
 
 **Steam Deck and touch screens:** with Steam Input on (the normal case when you start it from Steam), the sticks and buttons work like a PS4 pad, the **right trackpad** moves the fairy pointer and clicking it interacts. With Steam Input off, the right trackpad is the fairy pointer and a **left trackpad click** opens the town map. **Tapping the touch screen** sends the fairy straight to that spot, and a short tap also interacts. Both can be switched off on the **Controls** page.
@@ -217,13 +226,14 @@ Keep a backup of your saves before moving them between devices. It's free insura
 
 ## What is changed in the game
 
-Very little. The PS4 system libraries the game calls (kernel, file system, audio, controller, saves, fonts, networking) are **translated** to Windows or Linux equivalents, and the PS4 **renderer is rewritten** to draw the game's frames with OpenGL. **Everything else is the game's own native code**, running unchanged.
+Very little. The PS4 system libraries the game calls (kernel, file system, audio, controller, saves, fonts, networking) are **translated** to Windows or Linux equivalents, and the PS4 **renderer is rewritten** to draw the game's frames on your GPU. **Everything else is the game's own native code**, running unchanged.
 
-The game's code is patched in **six places, 34 bytes in total**. The patches are applied in memory each time you play and never written to your dump:
+The game's code is patched in a few places. The patches are applied in memory each time you play and never written to your dump:
 
 - **Story skip** (2 bytes). The game has its own "start from the second half" skip, but it normally only offers it once a class has cleared the game. One 2-byte change offers it to every new character.
 - **Skip reminder** (26 bytes in four places). If you say no to the story skip, the game asks once more with a reminder that online play unlocks partway through the story, then respects your answer. Four small jumps send the game to a few lines of OpenCrown's own code that show the reminder.
 - **Tutorial question** (6 bytes). Instead of starting the tutorial automatically, the game asks *"Begin the tutorial?"* on a save's first character.
+- **Separate cameras** (online adventures only, [see below](#separate-cameras)).
 
 Each patch checks that the original bytes are exactly what it expects first; if they aren't, it leaves that spot alone.
 
@@ -260,6 +270,15 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 > [!NOTE]
 > Online play unlocks at the same point in the story as on PS4/PS5. Taking the story skip on a new character gets you there right away.
 
+### Separate cameras
+
+*New in 1.0.8 (Windows, Linux) and Mobile 0.1.6.* On PS4/PS5 everyone in an online room shares one camera. With OpenCrown, **each player's screen follows their own character** in online adventures, so you can explore a little apart.
+
+- **Fights keep the party together.** When anyone starts a fight, nobody can move on past it until its enemies are defeated. Walking back is always allowed.
+- **The host decides.** The setting is **Separate cameras when I host** on the **Online** page (Mobile: the Online page too). It's **on by default** in this version; we'd like to hear how it plays, and it may not stay the default.
+- **Everyone needs the new version.** If anyone in the room is on an older version, the whole room uses the shared camera as before.
+- Town and local (couch) play are unchanged.
+
 ## Privacy
 
 - **The lobby server sees:** your online name, a random account ID, your public IP and port (needed to connect players), your rooms and your friends list. It doesn't see or relay gameplay.
@@ -280,6 +299,7 @@ This is an early release from a hobby project, so expect a few rough edges:
 - The programs **aren't code-signed**, so SmartScreen and some antivirus tools may be suspicious at first.
 - **Linux / Steam Deck is brand new.** It has been tested on Ubuntu 22.04, but not yet on a real Steam Deck or on other desktops and distros. Feedback through **Report a Bug** or Discord is very welcome.
 - **Running the Windows version through Proton isn't supported.** On Linux and the Steam Deck, use the AppImage.
+- **Separate cameras are new.** If something looks wrong in an online adventure (a player stuck at a fight edge, an enemy that doesn't wake), the host can switch **Separate cameras when I host** off, and a bug report helps.
 
 Found something else? Use the launcher's **Report a Bug** page or [open an issue](https://github.com/Nezara/OpenCrown-PC/issues).
 
@@ -305,20 +325,8 @@ That gives you `OpenCrownPC Launcher.exe`, `dcp_run.exe` and `SDL3.dll` in `port
 
 The lobby server builds and tests separately with Node.js; see [`server/lobby-worker/README.md`](server/lobby-worker/README.md).
 
-### Repository layout
-
-| Folder | What's inside |
-|---|---|
-| `port/src/loader` | Loads the eboot and links it against our libraries |
-| `port/src/hle` | The translated PS4 system libraries |
-| `port/src/render` | The rewritten renderer (PS4 GPU → OpenGL) |
-| `port/src/formats` | Readers for the game's file formats (CPK archives, textures, audio, ...) |
-| `port/src/net` | Lobby client, peer-to-peer transport, STUN / UPnP, friends |
-| `port/tools` | The launcher, `dcp_run` and developer tools |
-| `port/tests` | Unit tests (synthetic data only, no game files) |
-| `linux-port` | The Linux / Steam Deck build (its own copy of the above, adapted for Linux) and its AppImage packaging |
-| `server/lobby-worker` | The lobby server (Cloudflare Worker, TypeScript) |
-| `notes/map` | Reverse-engineering notes on how the game's systems work |
+> [!NOTE]
+> **Some information is restricted.** Parts of this project's earlier research and code were copied by others without proper credit, so from 1.0.8 on, new features are published without detailed notes or explanations of how they work.
 
 ## FAQ
 
@@ -326,6 +334,24 @@ The lobby server builds and tests separately with Node.js; see [`server/lobby-wo
 <summary><b>Is this an emulator?</b></summary>
 
 No. An emulator pretends to be the whole console. OpenCrown runs the game's own code directly and only replaces the PS4 parts it talks to (system libraries and graphics). That's why it can be small and fast, but it also means it only runs Dragon's Crown Pro.
+</details>
+
+<details>
+<summary><b>Is this a decomp or a recomp?</b></summary>
+
+Neither. No game source code is reconstructed, and nothing from the game is rebuilt or included here. On Windows and Linux the game's original code from your own dump runs as it is; OpenCrown supplies the system around it. On Android the Vita version's code is translated for your phone's CPU while it runs.
+</details>
+
+<details>
+<summary><b>Is this online?</b></summary>
+
+Yes. Online co-op for up to 4 players works on every platform, with friend codes, room codes, the room list and room text chat. It's free, needs no PlayStation Network account, and the players connect directly to each other once the OpenCrown lobby has introduced them. See [Playing online](#playing-online).
+</details>
+
+<details>
+<summary><b>Is this the same as the "Dragon's Crown Pro Port"?</b></summary>
+
+No. OpenCrown is not affiliated with that project. It has copied content from this project without permission, and its creator has declined to collaborate.
 </details>
 
 <details>
@@ -350,6 +376,54 @@ Yes. Copy your `SAVEDATA00` folder into the save folder. The format is identical
 <summary><b>Does it run on the Steam Deck?</b></summary>
 
 Yes, with the Linux AppImage (see [Linux / Steam Deck](#linux--steam-deck)). Add it to Steam as a non-Steam game and it runs from Game Mode, launcher included, with the controller and touch screen. Please use the AppImage rather than the Windows version through Proton.
+</details>
+
+<details>
+<summary><b>How do separate cameras work, and can I turn them off?</b></summary>
+
+In online adventures, each player's screen follows their own character instead of one shared camera, and a fight holds everyone until its enemies are beaten. The host's **Separate cameras when I host** setting (Online page) decides for the room; switch it off to play with one shared camera like on PS4/PS5. See [Separate cameras](#separate-cameras).
+</details>
+
+<details>
+<summary><b>My friend and I are on different versions. Can we still play together?</b></summary>
+
+Yes. The room simply falls back to the shared camera while anyone is on an older version. Updating everyone through the launcher gives you the newest features.
+</details>
+
+<details>
+<summary><b>Does the Android (Vita) version play online with others?</b></summary>
+
+Yes. OpenCrown Mobile has the same online co-op as the PC version: up to 4 players, friends, rooms and chat. Go online at the stables in town. When an Android player hosts, they should be inside a dungeon before the others search for the room.
+</details>
+
+<details>
+<summary><b>Does the Android (Vita) version connect to PC and Steam Deck players?</b></summary>
+
+Yes. OpenCrown Mobile, OpenCrown PC on Windows and the Linux / Steam Deck version all use the same lobby, so players on any of them can be in one room, with either side hosting. Saves move between Mobile and PC without conversion too.
+</details>
+
+<details>
+<summary><b>Can I play with someone on a real PS Vita?</b></summary>
+
+No. Like on PC, OpenCrown Mobile only plays with other OpenCrown players. PlayStation Network isn't involved.
+</details>
+
+<details>
+<summary><b>Can I use a fan translation or other mod?</b></summary>
+
+Yes. Modified game archives are accepted; the **Game** page shows them as *modified*. Mods aren't supported or tested by OpenCrown, so keep a copy of your original files.
+</details>
+
+<details>
+<summary><b>Why aren't there detailed notes for the new features?</b></summary>
+
+Earlier research and code from this project were reused by others without proper credit. To protect the work, new features are published without detailed notes or explanations of how they work.
+</details>
+
+<details>
+<summary><b>Where do I get the latest version?</b></summary>
+
+From [opencrown.net](https://opencrown.net) or the [Releases](https://github.com/Nezara/OpenCrown-PC/releases/latest) page. Once installed, the launcher tells you when a new version is out and updates itself.
 </details>
 
 <details>

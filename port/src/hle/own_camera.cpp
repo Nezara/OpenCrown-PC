@@ -155,7 +155,7 @@ DCP_SYSV uint64_t own_send(uint64_t cam, uint64_t cmd, uint64_t a2, uint64_t a3,
 constexpr uint32_t kMagic = 0x3157434f;
 constexpr int kMaxRunning = 16;
 constexpr int32_t kNoLimit = 10000000;
-constexpr uint64_t kStaleMs = 120000, kStaleDoneMs = 60000;
+constexpr uint64_t kStaleMs = 120000, kStaleDoneMs = 10000;
 
 struct Rect {
     int32_t l = 0, r = 0, a = 0, b = 0;
@@ -193,6 +193,7 @@ std::map<int32_t, uint64_t> g_hello_at;
 uint64_t g_host_word_at = 0;
 bool g_host_word_on = false;
 uint64_t g_room_sent_v = ~0ull;
+uint64_t g_room_bad_ms = 0;
 struct Peer {
     int32_t round, stage;
     Rect view;
@@ -409,7 +410,10 @@ void room_tick(uint64_t g) {
                 std::lock_guard<std::mutex> lk(g_lock_mu);
                 for (auto& [ctx, at] : g_hello_at) heard += t - at < 3000;
             }
-            g_room_on = g_want && linked > 0 && heard >= linked;
+            bool ok = g_want && linked > 0 && heard >= linked;
+            if (ok || !g_room_on || !g_want || linked == 0) g_room_bad_ms = 0;
+            else if (!g_room_bad_ms) g_room_bad_ms = t;
+            g_room_on = ok || (g_room_bad_ms && t - g_room_bad_ms < 5000);
             b[8] = uint8_t(1 | (g_room_on ? 2 : 0));
         } else {
             std::lock_guard<std::mutex> lk(g_lock_mu);
@@ -482,6 +486,15 @@ DCP_SYSV void lease_right(uint64_t vc, int32_t v) {
     g_lease_dir = 0;
 }
 
+DCP_SYSV uint64_t lease_on(uint64_t vc, uint64_t actor) {
+    if (rd<int32_t>(vc + 0xd4) <= 0) return 0;
+    uint64_t g = gs();
+    if (g && gate(g))
+        for (int i = 0; i < 4; ++i)
+            if (player(g, i) == actor) return local(g, i);
+    return 1;
+}
+
 bool off(const char* env) {
     const char* v = std::getenv(env);
     return v && std::strcmp(v, "0") == 0;
@@ -545,7 +558,8 @@ struct LockSite {
     uint32_t target;
 };
 constexpr LockSite kInView{0x4648ea, 0xe8, 0x464b90}, kCount{0x464ae2, 0xe8, 0x464e30},
-    kLeaseL{0x464b53, 0xe8, 0x113f0}, kLeaseR{0x464b65, 0xe9, 0x11410};
+    kLeaseL{0x464b53, 0xe8, 0x113f0}, kLeaseR{0x464b65, 0xe9, 0x11410}, kClampA{0xf3ed8, 0xe8, 0x11450},
+    kClampB{0xf3f5e, 0xe8, 0x11450};
 
 }
 
@@ -566,7 +580,7 @@ void install(uint8_t* base) {
         std::fprintf(stderr, "own_camera: unexpected bytes at the camera receive / send sites; not installed\n");
         return;
     }
-    for (const LockSite& s : {kInView, kCount, kLeaseL, kLeaseR}) {
+    for (const LockSite& s : {kInView, kCount, kLeaseL, kLeaseR, kClampA, kClampB}) {
         uint8_t want[5] = {s.op};
         put_rel32(want + 1, base + s.target, base + s.site + 5);
         if (std::memcmp(base + s.site, want, 5)) {
@@ -606,6 +620,8 @@ void install(uint8_t* base) {
     m.p = count, m.jmp_abs(reinterpret_cast<uint64_t>(&group_count));
     m.p = lease_l, m.b({0x4c, 0x89, 0xfa}), m.jmp_abs(reinterpret_cast<uint64_t>(&lease_left));
     m.p = lease_r, m.jmp_abs(reinterpret_cast<uint64_t>(&lease_right));
+    uint8_t* clamp = page + 0x200;
+    m.p = clamp, m.b({0x48, 0x89, 0xde}), m.jmp_abs(reinterpret_cast<uint64_t>(&lease_on));
     FlushInstructionCache(GetCurrentProcess(), page, 0x1000);
 
     for (const CallSite& c : kCalls)
@@ -615,7 +631,8 @@ void install(uint8_t* base) {
         }
     bool out_of_range = !fits_rel32(rx, base + kRx + 5);
     for (uint32_t a : kSends) out_of_range |= !fits_rel32(tx, base + a + 5);
-    const std::pair<LockSite, uint8_t*> lock_hooks[] = {{kInView, inview}, {kCount, count}, {kLeaseL, lease_l}, {kLeaseR, lease_r}};
+    const std::pair<LockSite, uint8_t*> lock_hooks[] = {{kInView, inview}, {kCount, count}, {kLeaseL, lease_l},
+                                                        {kLeaseR, lease_r}, {kClampA, clamp}, {kClampB, clamp}};
     for (auto& [s, to] : lock_hooks) out_of_range |= !fits_rel32(to, base + s.site + 5);
     if (out_of_range) {
         std::fprintf(stderr, "own_camera: relay out of rel32 range; not installed\n");

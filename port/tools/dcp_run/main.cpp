@@ -21,6 +21,7 @@
 #include "hle/own_camera.h"
 #include "hle/confirm_button.h"
 #include "hle/skip_offers.h"
+#include "loader/cpu_compat.h"
 #include "loader/elf.h"
 #include "loader/hle.h"
 #include "render/capture.h"
@@ -350,6 +351,12 @@ int main(int argc, char** argv) {
                     rel.c_str(), bs.exported, bs.hle, bs.stubs, bs.data, bs.unknown, (unsigned long long)eb->info.entry);
         if (dry) return rs.unsupported.empty() ? 0 : 1;  // unknown NIDs are expected (unnamed NpToolkit2 C++ API)
 
+        const cpu_compat::Cpu cpu = cpu_compat::detect();
+        std::printf("cpu: %s (avx %d, movbe %d, bmi1 %d, lzcnt %d)\n", cpu.brand.c_str(), cpu.avx, cpu.movbe, cpu.bmi1,
+                    cpu.lzcnt);
+        if (!cpu.avx)
+            throw std::runtime_error("this CPU has no AVX (or Windows has it turned off); the game needs AVX: an Intel "
+                                     "Core 2nd generation (Sandy Bridge) / AMD FX or newer");
         std::fflush(stdout);
         g_params = {1, 0, {"eboot.bin", nullptr, nullptr, nullptr}};
         g_entry = reinterpret_cast<uint64_t>(eb->img.base) + eb->info.entry;
@@ -375,6 +382,8 @@ int main(int argc, char** argv) {
         if (render && window && input_path.empty()) input = install_sdl_input(input_dir);
         if (input) dcp::hle::ime_set_host(true);  // the render loop draws the name-entry box (ime_box.h)
 #endif
+        cpu_compat::install(eb->img.base, cpu_compat::kEboot, cpu);
+        if (libc) cpu_compat::install(libc->img.base, cpu_compat::kLibc, cpu);
         // Own thread so the game gets a large stack (PS4 main thread: guess 8 MiB; 16 MiB here), fully committed: game
         // code has no stack probes, so frames > 4 KiB would skip the Windows guard page.
         HANDLE t = CreateThread(nullptr, 16u << 20, game_thread, nullptr, 0, nullptr);

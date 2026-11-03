@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)  # Ubuntu 22.04 stock cmake
 project(OpenCrownLinux C CXX)
-set(OPENCROWN_VERSION "1.0.8.1")  # Linux build; versioned separately from the Windows build in ../port
+set(OPENCROWN_VERSION "1.0.8.2")  # Linux build; versioned separately from the Windows build in ../port
 # Updater end-to-end tests build a fake newer release in a separate build dir (packaging/make-appimage.sh, OC_VERSION).
 if(OPENCROWN_VERSION_OVERRIDE)
   set(OPENCROWN_VERSION "${OPENCROWN_VERSION_OVERRIDE}")
@@ -62,7 +62,7 @@ foreach(tool dcp_cpk dcp_tex dcp_audio dcp_sprite)
 endforeach()
 
 # Loader: maps the user's eboot into this process, relocates, binds imports to shims / module exports / stubs.
-add_library(dcp_loader STATIC src/loader/nid.cpp src/loader/elf.cpp src/loader/hle.cpp)
+add_library(dcp_loader STATIC src/loader/nid.cpp src/loader/elf.cpp src/loader/hle.cpp src/loader/cpu_compat.cpp)
 target_include_directories(dcp_loader PUBLIC src)
 
 include(FetchContent)
@@ -205,6 +205,9 @@ add_test(NAME formats COMMAND test_formats)
 add_executable(test_loader tests/test_loader.cpp)
 target_link_libraries(test_loader PRIVATE dcp_loader)
 add_test(NAME loader COMMAND test_loader)
+add_executable(test_cpu_compat tests/test_cpu_compat.cpp)  # MOVBE / BMI1 / LZCNT replacements vs the native instructions
+target_link_libraries(test_cpu_compat PRIVATE dcp_loader)
+add_test(NAME cpu_compat COMMAND test_cpu_compat)
 add_executable(test_hle tests/test_hle.cpp)
 target_link_libraries(test_hle PRIVATE dcp_hle)
 add_test(NAME hle COMMAND test_hle)

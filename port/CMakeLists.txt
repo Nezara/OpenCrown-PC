@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(DragonsCrownPort C CXX)
-set(OPENCROWN_VERSION "1.0.8.1")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
+set(OPENCROWN_VERSION "1.0.8.2")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
 # Test builds only (updater end-to-end test): -DOPENCROWN_VERSION_OVERRIDE=9.9.9. Never for a release.
 set(OPENCROWN_VERSION_OVERRIDE "" CACHE STRING "Override OPENCROWN_VERSION (updater tests only)")
 if(OPENCROWN_VERSION_OVERRIDE)
@@ -50,7 +50,7 @@ add_executable(dcp_sprite tools/dcp_sprite/main.cpp)
 target_link_libraries(dcp_sprite PRIVATE dcp_formats)
 
 # Stage 3 loader prototype (Windows x64): maps the user's eboot into this process, relocates, binds imports to stubs.
-add_library(dcp_loader STATIC src/loader/nid.cpp src/loader/elf.cpp src/loader/hle.cpp)
+add_library(dcp_loader STATIC src/loader/nid.cpp src/loader/elf.cpp src/loader/hle.cpp src/loader/cpu_compat.cpp)
 target_include_directories(dcp_loader PUBLIC src)
 
 # FreeType (FTL / GPLv2, we use it under the FTL) for the libSceFont shim. Fetched at configure time; no optional deps.
@@ -180,6 +180,9 @@ add_test(NAME formats COMMAND test_formats)
 add_executable(test_loader tests/test_loader.cpp)
 target_link_libraries(test_loader PRIVATE dcp_loader)
 add_test(NAME loader COMMAND test_loader)
+add_executable(test_cpu_compat tests/test_cpu_compat.cpp)  # MOVBE / BMI1 / LZCNT replacements vs the native instructions
+target_link_libraries(test_cpu_compat PRIVATE dcp_loader)
+add_test(NAME cpu_compat COMMAND test_cpu_compat)
 add_executable(test_hle tests/test_hle.cpp)
 target_link_libraries(test_hle PRIVATE dcp_hle)
 add_test(NAME hle COMMAND test_hle)

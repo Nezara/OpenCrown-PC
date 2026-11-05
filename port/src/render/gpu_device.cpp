@@ -6,11 +6,20 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
 
 #include "device.h"
+#include "shaders/generated/downscale_frag.dxil.h"
+#include "shaders/generated/downscale_frag.spv.h"
+#include "shaders/generated/easu_frag.dxil.h"
+#include "shaders/generated/easu_frag.spv.h"
+#include "shaders/generated/fsr_vert.dxil.h"
+#include "shaders/generated/fsr_vert.spv.h"
+#include "shaders/generated/rcas_frag.dxil.h"
+#include "shaders/generated/rcas_frag.spv.h"
 #include "shaders/generated/main_frag.dxil.h"
 #include "shaders/generated/main_frag.spv.h"
 #include "shaders/generated/main_vert.dxil.h"
@@ -28,6 +37,24 @@ struct VsBlock { float mat[16]; int32_t raw; int32_t pad[3]; };
 struct FsBlock { float tint[4], cst[4], cm[12], grad[64]; float factor; int32_t flags; int32_t pad[2]; };
 static_assert(sizeof(VsBlock) == 80 && sizeof(FsBlock) == 352, "std140 layout");
 static_assert(offsetof(FsBlock, factor) == 336 && offsetof(FsBlock, flags) == 340, "std140 layout");
+struct EasuBlock { uint32_t con[16]; };
+struct RcasBlock { uint32_t con[4]; int32_t origin[4]; };
+struct DownBlock { float scale[4]; int32_t origin[4]; };  // shaders/downscale.frag
+
+uint32_t fbits(float f) {
+    uint32_t u;
+    std::memcpy(&u, &f, 4);
+    return u;
+}
+EasuBlock easu_con(float in_w, float in_h, float out_w, float out_h) {
+    EasuBlock b{};
+    b.con[0] = fbits(in_w / out_w), b.con[1] = fbits(in_h / out_h);
+    b.con[2] = fbits(0.5f * in_w / out_w - 0.5f), b.con[3] = fbits(0.5f * in_h / out_h - 0.5f);
+    b.con[4] = fbits(1.0f / in_w), b.con[5] = fbits(1.0f / in_h), b.con[6] = fbits(1.0f / in_w), b.con[7] = fbits(-1.0f / in_h);
+    b.con[8] = fbits(-1.0f / in_w), b.con[9] = fbits(2.0f / in_h), b.con[10] = fbits(1.0f / in_w), b.con[11] = fbits(2.0f / in_h);
+    b.con[12] = fbits(0.0f), b.con[13] = fbits(4.0f / in_h);
+    return b;
+}
 
 SDL_GPUBlendFactor factor(uint32_t f) {
     static const SDL_GPUBlendFactor t[] = {
@@ -91,9 +118,11 @@ public:
         for (auto& [id, t] : texs_) SDL_ReleaseGPUTexture(dev_, t.t);
         if (scratch_) SDL_ReleaseGPUTexture(dev_, scratch_);
         for (auto& [k, p] : pipes_) SDL_ReleaseGPUGraphicsPipeline(dev_, p);
-        if (present_pipe_) SDL_ReleaseGPUGraphicsPipeline(dev_, present_pipe_);
+        for (SDL_GPUGraphicsPipeline* p : {present_pipe_, easu_pipe_, rcas_pipe_, down_pipe_, down_mid_pipe_, present_mid_pipe_})
+            if (p) SDL_ReleaseGPUGraphicsPipeline(dev_, p);
+        if (fsr_tex_) SDL_ReleaseGPUTexture(dev_, fsr_tex_);
         for (auto& [k, s] : samplers_) SDL_ReleaseGPUSampler(dev_, s);
-        for (SDL_GPUShader* s : {vs_, fs_, pvs_, pfs_}) if (s) SDL_ReleaseGPUShader(dev_, s);
+        for (SDL_GPUShader* s : {vs_, fs_, pvs_, pfs_, fvs_, efs_, rfs_, dfs_}) if (s) SDL_ReleaseGPUShader(dev_, s);
         if (vbuf_) SDL_ReleaseGPUBuffer(dev_, vbuf_);
         if (up_) SDL_ReleaseGPUTransferBuffer(dev_, up_);
         if (down_) SDL_ReleaseGPUTransferBuffer(dev_, down_);
@@ -127,18 +156,29 @@ public:
         // A test pipeline now, so a driver that rejects our shaders fails here (GL fallback) and not mid-game.
         if (!pipeline(pipe_key(Blend{}, Prim::Triangles))) return fail(err, std::string("pipeline: ") + SDL_GetError());
         if (win_) {
-            SDL_GPUColorTargetDescription ct{};
-            ct.format = SDL_GetGPUSwapchainTextureFormat(dev_, win_);
-            SDL_GPUGraphicsPipelineCreateInfo pi{};
-            pi.vertex_shader = pvs_, pi.fragment_shader = pfs_;
-            pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
-            pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
-            pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
-            pi.rasterizer_state.enable_depth_clip = true;
-            pi.target_info.color_target_descriptions = &ct;
-            pi.target_info.num_color_targets = 1;
-            present_pipe_ = SDL_CreateGPUGraphicsPipeline(dev_, &pi);
+            const SDL_GPUTextureFormat sw = SDL_GetGPUSwapchainTextureFormat(dev_, win_);
+            present_pipe_ = fullscreen_pipe(pvs_, pfs_, sw);
             if (!present_pipe_) return fail(err, std::string("present pipeline: ") + SDL_GetError());
+            fvs_ = shader(spv ? kFsrVertSpv : kFsrVertDxil, spv ? sizeof kFsrVertSpv : sizeof kFsrVertDxil,
+                          SDL_GPU_SHADERSTAGE_VERTEX, 0, 0);
+            efs_ = shader(spv ? kEasuFragSpv : kEasuFragDxil, spv ? sizeof kEasuFragSpv : sizeof kEasuFragDxil,
+                          SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+            rfs_ = shader(spv ? kRcasFragSpv : kRcasFragDxil, spv ? sizeof kRcasFragSpv : sizeof kRcasFragDxil,
+                          SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+            dfs_ = shader(spv ? kDownscaleFragSpv : kDownscaleFragDxil,
+                          spv ? sizeof kDownscaleFragSpv : sizeof kDownscaleFragDxil, SDL_GPU_SHADERSTAGE_FRAGMENT, 1, 1);
+            if (fvs_ && efs_ && rfs_) {
+                easu_pipe_ = fullscreen_pipe(fvs_, efs_, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+                rcas_pipe_ = fullscreen_pipe(fvs_, rfs_, sw);
+            }
+            if (fvs_ && dfs_) {
+                down_pipe_ = fullscreen_pipe(fvs_, dfs_, sw);
+                down_mid_pipe_ = fullscreen_pipe(fvs_, dfs_, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+            }
+            present_mid_pipe_ = fullscreen_pipe(pvs_, pfs_, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM);
+            if (!easu_pipe_ || !rcas_pipe_ || !down_pipe_ || !down_mid_pipe_ || !present_mid_pipe_)
+                std::fprintf(stderr, "render: present filters incomplete (FSR %d, sharpen %d, downscale %d): %s\n",
+                             easu_pipe_ != nullptr, rcas_pipe_ != nullptr, down_pipe_ != nullptr, SDL_GetError());
         }
         const uint8_t px[4] = {255, 255, 255, 255};
         white_ = upload(0, TexFormat::RGBA8, 1, 1, px, 4, false);
@@ -259,42 +299,88 @@ public:
         return true;
     }
 
-    void present(TexId id, int tw, int th, int, int, Overlay* overlay) override {
+    void set_upscaler(bool fsr, float sharpness) override { fsr_ = fsr, sharpness_ = sharpness; }
+
+    bool present(TexId id, int tw, int th, int, int, Overlay* overlay) override {
         submit();
-        if (!win_) return;
+        if (!win_) return false;
         SDL_GPUCommandBuffer* cmd = SDL_AcquireGPUCommandBuffer(dev_);
-        if (!cmd) return;
+        if (!cmd) return false;
         SDL_GPUTexture* sw = nullptr;
         Uint32 w = 0, h = 0;
         if (!SDL_WaitAndAcquireGPUSwapchainTexture(cmd, win_, &sw, &w, &h) || !sw) {  // minimised / occluded
             SDL_SubmitGPUCommandBuffer(cmd);
-            return;
+            return false;
         }
         if (overlay) overlay->prepare(cmd);
+        auto it = texs_.find(id);
+        const bool pic = it != texs_.end() && tw > 0 && th > 0;
+        int dw = 0, dh = 0, x = 0, y = 0;
+        if (pic) {
+            float s = std::min(float(w) / tw, float(h) / th);
+            dw = int(tw * s), dh = int(th * s), x = (int(w) - dw) / 2, y = (int(h) - dh) / 2;
+        }
+        const bool same = dw == tw && dh == th, up = dw > tw || dh > th, down = !up && !same;
+        const bool sharpen = pic && sharpness_ >= 0 && rcas_pipe_;
+        const bool easu = pic && up && fsr_ && easu_pipe_;
+        const bool mid = pic && (easu || (sharpen && !same)) && fsr_target(dw, dh);
+        SDL_GPUTexture* src = pic ? it->second.t : nullptr;
+        auto blit = [&](SDL_GPURenderPass* p, SDL_GPUGraphicsPipeline* pipe, SDL_GPUTexture* t, const void* u, uint32_t n) {
+            SDL_BindGPUGraphicsPipeline(p, pipe);
+            if (u) SDL_PushGPUFragmentUniformData(cmd, 0, u, n);
+            SDL_GPUTextureSamplerBinding b{t, sampler(kLinearClamp)};
+            SDL_BindGPUFragmentSamplers(p, 0, &b, 1);
+            SDL_DrawGPUPrimitives(p, 3, 1, 0, 0);
+        };
+        auto down_con = [&](int ox, int oy) {
+            return DownBlock{{float(tw) / dw, float(th) / dh, 1.0f / tw, 1.0f / th}, {ox, oy, 0, 0}};
+        };
+        const char* how = up && easu ? "FSR 1" : down && down_pipe_ ? "box downscale" : same ? "1:1" : "bilinear";
+        if (mid) {  // scale step: target -> fsr_tex_ (dw x dh)
+            SDL_GPUColorTargetInfo et{};
+            et.texture = fsr_tex_, et.load_op = SDL_GPU_LOADOP_DONT_CARE, et.store_op = SDL_GPU_STOREOP_STORE;
+            SDL_GPURenderPass* ep = SDL_BeginGPURenderPass(cmd, &et, 1, nullptr);
+            if (easu) {
+                const EasuBlock con = easu_con(float(tw), float(th), float(dw), float(dh));
+                blit(ep, easu_pipe_, src, &con, sizeof con);
+            } else if (down && down_mid_pipe_) {
+                const DownBlock con = down_con(0, 0);
+                blit(ep, down_mid_pipe_, src, &con, sizeof con);
+            } else {
+                blit(ep, present_mid_pipe_, src, nullptr, 0);
+            }
+            SDL_EndGPURenderPass(ep);
+        }
         SDL_GPUColorTargetInfo ct{};
         ct.texture = sw, ct.clear_color = {0, 0, 0, 1}, ct.load_op = SDL_GPU_LOADOP_CLEAR, ct.store_op = SDL_GPU_STOREOP_STORE;
         SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &ct, 1, nullptr);
-        auto it = texs_.find(id);
-        int dw = 0, dh = 0, x = 0, y = 0;
-        if (it != texs_.end() && tw > 0 && th > 0) {
-            float s = std::min(float(w) / tw, float(h) / th);
-            dw = int(tw * s), dh = int(th * s), x = (int(w) - dw) / 2, y = (int(h) - dh) / 2;
+        if (pic) {
             SDL_GPUViewport vp{float(x), float(y), float(dw), float(dh), 0, 1};
             SDL_SetGPUViewport(pass, &vp);
-            SDL_BindGPUGraphicsPipeline(pass, present_pipe_);
-            SDL_GPUTextureSamplerBinding b{it->second.t, sampler(kLinearClamp)};
-            SDL_BindGPUFragmentSamplers(pass, 0, &b, 1);
-            SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+            if (sharpen && (mid || same)) {
+                const RcasBlock con{{fbits(std::exp2(-sharpness_)), 0, 0, 0}, {x, y, 0, 0}};
+                blit(pass, rcas_pipe_, mid ? fsr_tex_ : src, &con, sizeof con);
+            } else if (mid) {  // EASU without sharpening: 1:1 copy
+                blit(pass, present_pipe_, fsr_tex_, nullptr, 0);
+            } else if (down && down_pipe_) {
+                const DownBlock con = down_con(x, y);
+                blit(pass, down_pipe_, src, &con, sizeof con);
+            } else {
+                blit(pass, present_pipe_, src, nullptr, 0);
+            }
             SDL_GPUViewport full{0, 0, float(w), float(h), 0, 1};
             SDL_SetGPUViewport(pass, &full);
         }
         if (overlay) overlay->render(cmd, pass);
         SDL_EndGPURenderPass(pass);
         SDL_SubmitGPUCommandBuffer(cmd);
-        if (!logged_present_) {
-            logged_present_ = true;
-            std::fprintf(stderr, "render: present %dx%d -> swapchain %ux%u (%dx%d at %d,%d)\n", tw, th, w, h, dw, dh, x, y);
+        const int mode = (pic ? 1 : 0) | (easu ? 2 : 0) | (down ? 4 : 0) | (sharpen && (mid || same) ? 8 : 0);
+        if (!logged_present_ || mode != logged_mode_) {
+            logged_present_ = true, logged_mode_ = mode;
+            std::fprintf(stderr, "render: present %dx%d -> swapchain %ux%u (%dx%d at %d,%d), %s%s\n", tw, th, w, h, dw, dh, x,
+                         y, how, mode & 8 ? " + sharpen" : "");
         }
+        return true;
     }
 
 private:
@@ -323,6 +409,29 @@ private:
         si.code_size = n, si.code = code, si.entrypoint = "main", si.format = fmt_, si.stage = stage;
         si.num_samplers = samplers, si.num_uniform_buffers = ubos;
         return SDL_CreateGPUShader(dev_, &si);
+    }
+
+    SDL_GPUGraphicsPipeline* fullscreen_pipe(SDL_GPUShader* vs, SDL_GPUShader* fs, SDL_GPUTextureFormat f) {
+        SDL_GPUColorTargetDescription ct{};
+        ct.format = f;
+        SDL_GPUGraphicsPipelineCreateInfo pi{};
+        pi.vertex_shader = vs, pi.fragment_shader = fs;
+        pi.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        pi.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+        pi.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        pi.rasterizer_state.enable_depth_clip = true;
+        pi.target_info.color_target_descriptions = &ct;
+        pi.target_info.num_color_targets = 1;
+        return SDL_CreateGPUGraphicsPipeline(dev_, &pi);
+    }
+
+    bool fsr_target(int w, int h) {
+        if (fsr_tex_ && fsr_w_ == w && fsr_h_ == h) return true;
+        if (fsr_tex_) SDL_ReleaseGPUTexture(dev_, fsr_tex_);
+        fsr_tex_ = texture(SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, w, h,
+                           SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        fsr_w_ = fsr_tex_ ? w : 0, fsr_h_ = fsr_tex_ ? h : 0;
+        return fsr_tex_ != nullptr;
     }
 
     SDL_GPUTexture* texture(SDL_GPUTextureFormat f, int w, int h, SDL_GPUTextureUsageFlags usage) {
@@ -528,8 +637,16 @@ private:
     SDL_GPUDevice* dev_;
     SDL_Window* win_;
     SDL_GPUShaderFormat fmt_ = SDL_GPU_SHADERFORMAT_INVALID;
-    SDL_GPUShader *vs_ = nullptr, *fs_ = nullptr, *pvs_ = nullptr, *pfs_ = nullptr;
-    SDL_GPUGraphicsPipeline* present_pipe_ = nullptr;
+    SDL_GPUShader *vs_ = nullptr, *fs_ = nullptr, *pvs_ = nullptr, *pfs_ = nullptr, *fvs_ = nullptr, *efs_ = nullptr,
+                  *rfs_ = nullptr;
+    SDL_GPUShader* dfs_ = nullptr;
+    SDL_GPUGraphicsPipeline *present_pipe_ = nullptr, *easu_pipe_ = nullptr, *rcas_pipe_ = nullptr, *down_pipe_ = nullptr,
+                            *down_mid_pipe_ = nullptr, *present_mid_pipe_ = nullptr;
+    bool fsr_ = false;
+    float sharpness_ = -1;  // RCAS stops (0 = sharpest); < 0 = no sharpening
+    SDL_GPUTexture* fsr_tex_ = nullptr;  // scale-step output at the rect's size
+    int fsr_w_ = 0, fsr_h_ = 0;
+    int logged_mode_ = 0;
     std::unordered_map<uint32_t, SDL_GPUGraphicsPipeline*> pipes_;
     std::unordered_map<uint32_t, SDL_GPUSampler*> samplers_;
     std::unordered_map<TexId, Tex> texs_;

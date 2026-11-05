@@ -29,7 +29,9 @@ public:
     std::vector<uint8_t> read_rgb(int* w, int* h) const;
     // Draws the shown target into the window (w x h pixels), letterboxed. GL: into the default framebuffer (the
     // caller swaps); SDL_gpu: acquires, draws (then overlay) and submits the swapchain image.
-    void present(int w, int h, Device::Overlay* overlay = nullptr) const;
+    void set_render_scale(float s);
+    void set_upscaler(bool fsr, float sharpness);
+    bool present(int w, int h, Device::Overlay* overlay = nullptr) const;
     // Button prompts (prompts.h): kbm = show keyboard/mouse glyphs instead of the pad's; bindings = input.ini action ->
     // first bound input name.
     void set_prompt_kbm(bool kbm);

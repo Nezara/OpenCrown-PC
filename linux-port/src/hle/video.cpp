@@ -1,8 +1,10 @@
 // libSceVideoOut: no display yet, but the game loop is paced. sceVideoOutWaitVblank sleeps to the next 1/60 s
 // boundary (CLOCK_MONOTONIC) and is the frame clock (vblank_count) used by the input script and --frames. Flips are counted in
-// gnm.cpp (they arrive through sceGnmSubmitAndFlipCommandBuffers).
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 
 #include <sched.h>
 
@@ -14,6 +16,12 @@ namespace {
 
 std::atomic<uint64_t> g_vblanks{0};
 int64_t g_next = 0;      // host_ns of the next vblank (main thread only)
+std::atomic<int64_t> g_period{0};
+std::atomic<bool> g_lock{false};
+std::atomic<uint64_t> g_presents{0};
+std::atomic<int64_t> g_last_present{0};
+std::mutex g_present_mu;
+std::condition_variable g_present_cv;
 
 constexpr int32_t kVideoHandle = 1;
 
@@ -55,13 +63,32 @@ DCP_SYSV int32_t sceVideoOutAddFlipEvent(void*, int32_t, void*) { return kOk; }
 DCP_SYSV int32_t sceVideoOutAddVblankEvent(void*, int32_t, void*) { return kOk; }
 DCP_SYSV int32_t sceVideoOutSetFlipRate(int32_t, int32_t) { return kOk; }
 
-DCP_SYSV int32_t sceVideoOutWaitVblank(int32_t) {
-    const int64_t period = 1000000000ll / 60;
+bool wait_present(int64_t period) {
     int64_t now = int64_t(host_ns());
-    if (g_next == 0 || now - g_next > 4 * period) g_next = now + period;  // first call / long stall
-    if (g_next - now > 1000000) host_sleep_ns(uint64_t(g_next - now - 1000000));  // sleep to 1 ms before, then spin
-    while (int64_t(host_ns()) < g_next) sched_yield();
-    g_next += period;
+    if (now - g_last_present.load() > 4 * period) return false;
+    const uint64_t seen = g_presents.load();
+    const int64_t until = now + period * 3 / 2;
+    {
+        std::unique_lock<std::mutex> lk(g_present_mu);
+        while (g_presents.load() == seen) {
+            const int64_t left = until - int64_t(host_ns());
+            if (left <= 0) return false;
+            g_present_cv.wait_for(lk, std::chrono::nanoseconds(left));
+        }
+    }
+    g_next = int64_t(host_ns()) + period;  // the timer continues from here if presents stop
+    return true;
+}
+
+DCP_SYSV int32_t sceVideoOutWaitVblank(int32_t) {
+    const int64_t period = g_period.load() ? g_period.load() : 1000000000ll / 60;
+    if (!g_lock.load() || !wait_present(period)) {
+        int64_t now = int64_t(host_ns());
+        if (g_next == 0 || now - g_next > 4 * period) g_next = now + period;  // first call / long stall
+        if (g_next - now > 1000000) host_sleep_ns(uint64_t(g_next - now - 1000000));  // sleep to 1 ms before, then spin
+        while (int64_t(host_ns()) < g_next) sched_yield();
+        g_next += period;
+    }
     uint64_t v = ++g_vblanks;
     if (config().max_frames && v >= config().max_frames) {
         std::fprintf(stderr, "reached --frames %llu (flips %llu)\n", (unsigned long long)v,
@@ -75,6 +102,20 @@ DCP_SYSV int32_t sceVideoOutWaitVblank(int32_t) {
 
 uint64_t vblank_count() { return g_vblanks.load(); }
 uint64_t vblank_count_public() { return g_vblanks.load(); }
+
+void set_display_sync(double hz, bool lock) {
+    g_period = hz > 0 ? int64_t(1e9 / hz) : 0;
+    g_lock = lock;
+}
+
+void display_vblank() {
+    {
+        std::lock_guard<std::mutex> lk(g_present_mu);
+        g_last_present = int64_t(host_ns());
+        ++g_presents;
+    }
+    g_present_cv.notify_all();
+}
 
 void register_video() {
     const char* v = "libSceVideoOut";

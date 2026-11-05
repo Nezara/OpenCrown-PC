@@ -128,12 +128,14 @@ struct Backend::Impl {
     long dump_flip = std::getenv("DCP_RENDER_DUMP") ? std::atol(std::getenv("DCP_RENDER_DUMP")) : -1;
     uint32_t sprite_ps_perm[64];                   // PS pool index -> sprite permutation bits (0xff = not a sprite PS)
 
+    float scale = 1;
+
     Target& target(uint64_t base, int w, int h) {
         Target& t = targets[base];
         if (!t.tex) {
-            t.w = w, t.h = h;
-            t.tex = dev->create_target(w, h);
-            std::fprintf(stderr, "render: target %llx %dx%d\n", (unsigned long long)base, w, h);
+            t.w = std::clamp(int(std::lround(w * scale)), 1, 16384), t.h = std::clamp(int(std::lround(h * scale)), 1, 16384);
+            t.tex = dev->create_target(t.w, t.h);
+            std::fprintf(stderr, "render: target %llx %dx%d (game %dx%d)\n", (unsigned long long)base, t.w, t.h, w, h);
         }
         return t;
     }
@@ -515,7 +517,12 @@ struct Backend::Impl {
         d.target = t.tex, d.tw = t.w, d.th = t.h;
         d.prim = prim;
         d.scissor = r.scissor_on && r.scissor[2] > r.scissor[0] && r.scissor[3] > r.scissor[1];
-        if (d.scissor) d.sc[0] = r.scissor[0], d.sc[1] = r.scissor[1], d.sc[2] = r.scissor[2] - r.scissor[0], d.sc[3] = r.scissor[3] - r.scissor[1];
+        if (d.scissor) {
+            const float sx = float(t.w) / r.rt_w, sy = float(t.h) / r.rt_h;
+            const int x0 = int(std::lround(r.scissor[0] * sx)), y0 = int(std::lround(r.scissor[1] * sy));
+            const int x1 = int(std::lround(r.scissor[2] * sx)), y1 = int(std::lround(r.scissor[3] * sy));
+            d.sc[0] = x0, d.sc[1] = y0, d.sc[2] = x1 - x0, d.sc[3] = y1 - y0;
+        }
         d.blend = blend(r.blend);
         TexId tex = (r.tex[0][0] || r.tex[0][1]) ? texture(r.tex[0]) : 0;
         int mask_uv = 0;
@@ -780,10 +787,14 @@ std::vector<uint8_t> Backend::read_rgb(int* w, int* h) const {
     return rgb;
 }
 
-void Backend::present(int w, int h, Device::Overlay* overlay) const {
+void Backend::set_render_scale(float s) { m_->scale = std::clamp(s, 0.25f, 4.0f); }
+
+void Backend::set_upscaler(bool fsr, float sharpness) { if (m_->dev) m_->dev->set_upscaler(fsr, sharpness); }
+
+bool Backend::present(int w, int h, Device::Overlay* overlay) const {
     int tw = 0, th = 0;
     TexId tex = shown_texture(&tw, &th);
-    m_->dev->present(tex, tw, th, w, h, overlay);
+    return m_->dev->present(tex, tw, th, w, h, overlay);
 }
 
 const char* Backend::device_name() const { return m_->dev ? m_->dev->name() : "none"; }

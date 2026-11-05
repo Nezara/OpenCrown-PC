@@ -16,6 +16,12 @@ struct RenderOptions {
     SdlInputPump* input = nullptr;                          // live keyboard/mouse/gamepad source, or null
     std::string input_dir;                                  // folder of input.ini (button-prompt labels)
     std::string renderer = "auto";                          // auto (SDL GPU, OpenGL fallback) | gpu | gl
+    bool vsync = false;
+    bool fsr = false;
+    float sharpness = -1;                                   // RCAS sharpening stops (0 = sharpest), < 0 = off
+    float scale = 1;                                        // render targets at scale x the game's size
+    bool scale_window = false;
+    int game_w = 1920, game_h = 1080;                       // the game's output size (3840x2160 with --4k)
 };
 
 // Runs on the process main thread until the game exits or the window closes (calls finish, never returns normally).

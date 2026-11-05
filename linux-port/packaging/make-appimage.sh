@@ -41,6 +41,7 @@ cp "$deps/freetype-src/docs/FTL.TXT" "$lic/FreeType-FTL.txt"
 cp "$deps/mbedtls-src/LICENSE" "$lic/MbedTLS-Apache-2.0.txt"
 cp "$deps/miniupnpc-src/LICENSE" "$lic/miniupnpc-BSD-3.txt"
 cp "$deps/imgui-src/LICENSE.txt" "$lic/DearImGui-MIT.txt"
+cp "$here/packaging/licenses/AMD-FidelityFX-FSR1-MIT.txt" "$lic/"
 cp "$here/packaging/THIRD-PARTY-NOTICES.txt" "$app/usr/share/doc/opencrown/"
 
 # 3. appimagetool (pinned).

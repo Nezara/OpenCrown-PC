@@ -242,7 +242,7 @@ public:
     // Drawn as a textured quad, not glBlitFramebuffer: a blit into a multisampled window framebuffer (antialiasing
     // forced in the GPU driver's control panel) is GL_INVALID_OPERATION and left the window black while the game ran
     // (bug reports 28/29, GTX 1660). The first present logs the window framebuffer's samples and any GL error.
-    void present(TexId tex, int tw, int th, int w, int h, Overlay*) override {
+    bool present(TexId tex, int tw, int th, int w, int h, Overlay*) override {
         static bool logged = false;
         while (!logged && glGetError()) {}  // errors from the replay are not the present's
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -252,7 +252,7 @@ public:
         glViewport(0, 0, w, h);
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
-        if (!tex) return;
+        if (!tex) return true;
         float s = std::min(float(w) / tw, float(h) / th);
         int dw = int(tw * s), dh = int(th * s), x = (w - dw) / 2, y = (h - dh) / 2;
         glViewport(x, y, dw, dh);
@@ -280,6 +280,7 @@ public:
             std::fprintf(stderr, "render: present %dx%d -> window %dx%d (%dx%d at %d,%d), window samples %d/%d, GL error 0x%x\n",
                          tw, th, w, h, dw, dh, x, y, sb, ns, err);
         }
+        return true;
     }
 
 private:

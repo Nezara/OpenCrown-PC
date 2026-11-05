@@ -4,6 +4,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -13,11 +15,13 @@
 #include "chat_box.h"
 #include "ime_box.h"
 #include "sdl_input.h"
+#include "hle/hle.h"
 #include "render/backend.h"
 #include "render/capture.h"
 #include "render/gl.h"
 #include "render/png.h"
 #include "../common/input_defaults.h"
+#include "../common/steam_video.h"
 
 namespace {
 
@@ -51,13 +55,14 @@ bool open_gpu(const RenderOptions& o, SDL_Window** win, SDL_GPUDevice** dev, std
     if (o.window) {
         if (!SDL_ClaimWindowForGPUDevice(*dev, *win)) return undo(std::string("swapchain: ") + SDL_GetError());
         claimed = true;
-        // Uncapped like the GL path's swap interval 0 (the game paces itself): mailbox, else immediate, else vsync.
         SDL_GPUPresentMode mode = SDL_GPU_PRESENTMODE_VSYNC;
         const char* name = "vsync";
-        if (SDL_WindowSupportsGPUPresentMode(*dev, *win, SDL_GPU_PRESENTMODE_MAILBOX))
+        if (o.vsync) {
+        } else if (SDL_WindowSupportsGPUPresentMode(*dev, *win, SDL_GPU_PRESENTMODE_MAILBOX)) {
             mode = SDL_GPU_PRESENTMODE_MAILBOX, name = "mailbox";
-        else if (SDL_WindowSupportsGPUPresentMode(*dev, *win, SDL_GPU_PRESENTMODE_IMMEDIATE))
+        } else if (SDL_WindowSupportsGPUPresentMode(*dev, *win, SDL_GPU_PRESENTMODE_IMMEDIATE)) {
             mode = SDL_GPU_PRESENTMODE_IMMEDIATE, name = "immediate";
+        }
         if (!SDL_SetGPUSwapchainParameters(*dev, *win, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
             return undo(std::string("swapchain parameters: ") + SDL_GetError());
         std::fprintf(stderr, "render: SDL GPU present mode %s\n", name);
@@ -68,6 +73,24 @@ bool open_gpu(const RenderOptions& o, SDL_Window** win, SDL_GPUDevice** dev, std
     const char* gpu_name = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(*dev), SDL_PROP_GPU_DEVICE_NAME_STRING, nullptr);
     std::fprintf(stderr, "render: SDL GPU (%s) on %s\n", SDL_GetGPUDeviceDriver(*dev), gpu_name ? gpu_name : "?");
     return true;
+}
+
+double display_hz(SDL_Window* w) {
+    const SDL_DisplayMode* m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w));
+    if (!m) return 0;
+    if (m->refresh_rate_numerator > 0 && m->refresh_rate_denominator > 0)
+        return double(m->refresh_rate_numerator) / m->refresh_rate_denominator;
+    return m->refresh_rate;
+}
+
+bool sync_display(const RenderOptions& o, SDL_Window* w) {
+    if (!o.vsync || !o.window) return false;
+    const double hz = display_hz(w);
+    const bool lock = hz >= 59.0 && hz <= 61.0;
+    dcp::hle::set_display_sync(lock ? hz : 0, lock);
+    std::fprintf(stderr, "render: vsync, display %.3f Hz, game clock %s\n", hz,
+                 lock ? "follows the display" : "own 60 Hz timer");
+    return lock;
 }
 
 // The IME box's ImGui pass inside the SDL GPU swapchain pass.
@@ -81,7 +104,10 @@ struct ImeOverlay final : dcp::render::Device::Overlay {
 }  // namespace
 
 int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish)(int)) {
+    const bool steam_x11 = steam_prefer_x11();
     if (!SDL_Init(SDL_INIT_VIDEO)) { std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    std::fprintf(stderr, "video: SDL driver %s%s\n", SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "?",
+                 steam_x11 ? " (started by Steam: x11 first, so Steam Input sees the window)" : "");
     SDL_Window* win = nullptr;
     SDL_GPUDevice* gpu = nullptr;
     SDL_GLContext ctx = nullptr;
@@ -112,12 +138,25 @@ int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish
             std::fprintf(stderr, "missing GL entry point %s\n", miss);
             return 1;
         }
-        SDL_GL_SetSwapInterval(0);  // the game paces itself (vblank shim)
+        SDL_GL_SetSwapInterval(o.vsync ? 1 : 0);  // off: the game paces itself (vblank shim)
         std::fprintf(stderr, "render: GL %s on %s\n", (const char*)dcp::gl::glGetString(GL_VERSION),
                      (const char*)dcp::gl::glGetString(GL_RENDERER));
         if (!be.init()) return 1;
     }
     be.set_prompt_bindings(prompt_bindings(o.input_dir.empty() ? dcp::user_dir() : o.input_dir));
+    be.set_upscaler(o.fsr, o.sharpness);
+    float scale = o.scale;
+    if (o.scale_window && o.window) {
+        int w = 0, h = 0;
+        SDL_GetWindowSizeInPixels(win, &w, &h);
+        if (w > 0 && h > 0) scale = std::min(float(w) / o.game_w, float(h) / o.game_h);
+    }
+    be.set_render_scale(scale);
+    if (scale != 1) std::fprintf(stderr, "render: render scale %.3f (%dx%d)\n", scale, int(std::lround(o.game_w * scale)),
+                                 int(std::lround(o.game_h * scale)));
+    if ((o.fsr || o.sharpness >= 0) && !gpu)
+        std::fprintf(stderr, "render: FSR 1 / sharpening need SDL GPU; OpenGL presents bilinear\n");
+    bool locked = sync_display(o, win), presented = false;
     // Name entry (sceImeDialog): only drawn with live input; scripted / hidden runs finish it headless (hle/ime.h).
     ImeBox ime;
     ImeOverlay ime_overlay(&ime);
@@ -175,6 +214,7 @@ int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish
                 std::fprintf(stderr, "render: window closed\n");
                 finish(0);
             }
+            if (e.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED) locked = sync_display(o, win);
             if (o.input) o.input->handle_event(e);
             ime.handle_event(e);
             chat.handle_event(win, e, ime.blocking());
@@ -189,59 +229,61 @@ int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish
             o.input->update(win);
         }
         if (pthread_tryjoin_np(game_thread, nullptr) == 0) finish(0);  // GNU: non-blocking join
-        auto f = dcp::render::take_frame(50);
-        if (!f) continue;
+        auto f = dcp::render::take_frame(locked ? 20 : 50);
+        if (!f && !(locked && presented)) continue;
         uint64_t work0 = SDL_GetTicksNS();
-        for (; next_prompt_event < prompt_events.size() && f->vblank >= prompt_events[next_prompt_event].first; ++next_prompt_event) {
-            SDL_Event ev{};
-            if (prompt_events[next_prompt_event].second) {
-                ev.type = SDL_EVENT_KEY_DOWN, ev.key.scancode = SDL_SCANCODE_E, ev.key.down = true;
-            } else {
-                ev.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN, ev.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH, ev.gbutton.down = true;
-            }
-            if (o.input) o.input->handle_event(ev);
-            else test_dev.on_event(ev);
-            std::fprintf(stderr, "prompt: test %s event at vblank %llu\n", prompt_events[next_prompt_event].second ? "key" : "pad",
-                         (unsigned long long)f->vblank);
-        }
-        for (; next_touch_event < touch_events.size() && f->vblank >= touch_events[next_touch_event].v; ++next_touch_event) {
-            const TouchEv& t = touch_events[next_touch_event];
-            SDL_Event ev{};
-            if (t.kind == 'D' || t.kind == 'M' || t.kind == 'U') {  // left mouse (gamescope's touch emulation)
-                int w = 1, h = 1;
-                SDL_GetWindowSize(win, &w, &h);
-                ev.type = t.kind == 'D' ? SDL_EVENT_MOUSE_BUTTON_DOWN : t.kind == 'U' ? SDL_EVENT_MOUSE_BUTTON_UP
-                                                                       : SDL_EVENT_MOUSE_MOTION;
-                if (t.kind == 'M') {
-                    ev.motion.timestamp = SDL_GetTicksNS(), ev.motion.windowID = SDL_GetWindowID(win), ev.motion.which = 1;
-                    ev.motion.state = SDL_BUTTON_LMASK, ev.motion.x = t.x * w, ev.motion.y = t.y * h;
+        if (f) {
+            for (; next_prompt_event < prompt_events.size() && f->vblank >= prompt_events[next_prompt_event].first; ++next_prompt_event) {
+                SDL_Event ev{};
+                if (prompt_events[next_prompt_event].second) {
+                    ev.type = SDL_EVENT_KEY_DOWN, ev.key.scancode = SDL_SCANCODE_E, ev.key.down = true;
                 } else {
-                    ev.button.timestamp = SDL_GetTicksNS(), ev.button.windowID = SDL_GetWindowID(win), ev.button.which = 1;
-                    ev.button.button = SDL_BUTTON_LEFT, ev.button.down = t.kind == 'D', ev.button.clicks = 1;
-                    ev.button.x = t.x * w, ev.button.y = t.y * h;
+                    ev.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN, ev.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH, ev.gbutton.down = true;
                 }
-                SDL_PushEvent(&ev);
-                std::fprintf(stderr, "touch: test mouse %c %.3f %.3f at vblank %llu\n", t.kind, t.x, t.y,
+                if (o.input) o.input->handle_event(ev);
+                else test_dev.on_event(ev);
+                std::fprintf(stderr, "prompt: test %s event at vblank %llu\n", prompt_events[next_prompt_event].second ? "key" : "pad",
                              (unsigned long long)f->vblank);
-                continue;
             }
-            ev.type = t.kind == 'd' ? SDL_EVENT_FINGER_DOWN : t.kind == 'u' ? SDL_EVENT_FINGER_UP : SDL_EVENT_FINGER_MOTION;
-            ev.tfinger.timestamp = SDL_GetTicksNS();
-            ev.tfinger.touchID = 1, ev.tfinger.fingerID = 1, ev.tfinger.x = t.x, ev.tfinger.y = t.y, ev.tfinger.pressure = 1;
-            ev.tfinger.windowID = SDL_GetWindowID(win);
-            SDL_PushEvent(&ev);
-            std::fprintf(stderr, "touch: test %c %.3f %.3f at vblank %llu\n", t.kind, t.x, t.y, (unsigned long long)f->vblank);
-        }
-        be.set_prompt_kbm(o.input ? o.input->kbm_active() : test_dev.kbm());
-        be.draw(*f);
-        if (next_shot < o.shots.size() && f->vblank >= o.shots[next_shot].first) {
-            int w, h;
-            auto rgb = be.read_rgb(&w, &h);
-            const std::string& path = o.shots[next_shot].second;
-            bool ok = w && dcp::render::write_png(path, w, h, rgb);
-            std::fprintf(stderr, "render: %s %s (flip %llu, vblank %llu, %zu draws)\n", ok ? "wrote" : "FAILED to write",
-                         path.c_str(), (unsigned long long)f->flip, (unsigned long long)f->vblank, f->draws.size());
-            if (++next_shot == o.shots.size() && !o.window) finish(ok ? 0 : 1);
+            for (; next_touch_event < touch_events.size() && f->vblank >= touch_events[next_touch_event].v; ++next_touch_event) {
+                const TouchEv& t = touch_events[next_touch_event];
+                SDL_Event ev{};
+                if (t.kind == 'D' || t.kind == 'M' || t.kind == 'U') {  // left mouse (gamescope's touch emulation)
+                    int w = 1, h = 1;
+                    SDL_GetWindowSize(win, &w, &h);
+                    ev.type = t.kind == 'D' ? SDL_EVENT_MOUSE_BUTTON_DOWN : t.kind == 'U' ? SDL_EVENT_MOUSE_BUTTON_UP
+                                                                           : SDL_EVENT_MOUSE_MOTION;
+                    if (t.kind == 'M') {
+                        ev.motion.timestamp = SDL_GetTicksNS(), ev.motion.windowID = SDL_GetWindowID(win), ev.motion.which = 1;
+                        ev.motion.state = SDL_BUTTON_LMASK, ev.motion.x = t.x * w, ev.motion.y = t.y * h;
+                    } else {
+                        ev.button.timestamp = SDL_GetTicksNS(), ev.button.windowID = SDL_GetWindowID(win), ev.button.which = 1;
+                        ev.button.button = SDL_BUTTON_LEFT, ev.button.down = t.kind == 'D', ev.button.clicks = 1;
+                        ev.button.x = t.x * w, ev.button.y = t.y * h;
+                    }
+                    SDL_PushEvent(&ev);
+                    std::fprintf(stderr, "touch: test mouse %c %.3f %.3f at vblank %llu\n", t.kind, t.x, t.y,
+                                 (unsigned long long)f->vblank);
+                    continue;
+                }
+                ev.type = t.kind == 'd' ? SDL_EVENT_FINGER_DOWN : t.kind == 'u' ? SDL_EVENT_FINGER_UP : SDL_EVENT_FINGER_MOTION;
+                ev.tfinger.timestamp = SDL_GetTicksNS();
+                ev.tfinger.touchID = 1, ev.tfinger.fingerID = 1, ev.tfinger.x = t.x, ev.tfinger.y = t.y, ev.tfinger.pressure = 1;
+                ev.tfinger.windowID = SDL_GetWindowID(win);
+                SDL_PushEvent(&ev);
+                std::fprintf(stderr, "touch: test %c %.3f %.3f at vblank %llu\n", t.kind, t.x, t.y, (unsigned long long)f->vblank);
+            }
+            be.set_prompt_kbm(o.input ? o.input->kbm_active() : test_dev.kbm());
+            be.draw(*f);
+            if (next_shot < o.shots.size() && f->vblank >= o.shots[next_shot].first) {
+                int w, h;
+                auto rgb = be.read_rgb(&w, &h);
+                const std::string& path = o.shots[next_shot].second;
+                bool ok = w && dcp::render::write_png(path, w, h, rgb);
+                std::fprintf(stderr, "render: %s %s (flip %llu, vblank %llu, %zu draws)\n", ok ? "wrote" : "FAILED to write",
+                             path.c_str(), (unsigned long long)f->flip, (unsigned long long)f->vblank, f->draws.size());
+                if (++next_shot == o.shots.size() && !o.window) finish(ok ? 0 : 1);
+            }
         }
         if (o.window) {
             int w, h;
@@ -258,16 +300,20 @@ int run_render_loop(const RenderOptions& o, pthread_t game_thread, void (*finish
                     ime.end_frame();
                 }
             };
+            bool shown;
             if (gpu) {
                 overlay();
-                be.present(w, h, &ime_overlay);
+                shown = be.present(w, h, &ime_overlay);
             } else {
-                be.present(w, h);
+                shown = be.present(w, h);
                 overlay();
                 SDL_GL_SwapWindow(win);
             }
+            if (shown && (SDL_GetWindowFlags(win) & SDL_WINDOW_MINIMIZED)) shown = false;  // GL swaps do not wait then
+            presented = presented || shown;
+            if (locked && shown) dcp::hle::display_vblank();
         }
-        if (stats) {
+        if (stats && f) {
             uint64_t now = SDL_GetTicksNS();
             ++stat_flips, stat_work += now - work0, stat_draws += f->draws.size();
             if (now - stat_t0 >= 500000000ull) {

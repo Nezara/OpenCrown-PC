@@ -6,6 +6,8 @@ file.
   (https://freetype.org). All rights reserved.
 - miniupnpc 2.2.8 (BSD 3-Clause) - Copyright (c) Thomas Bernard - https://miniupnp.tuxfamily.org
 - Dear ImGui 1.91.9b (MIT) - Copyright (c) Omar Cornut - https://github.com/ocornut/imgui
+- AMD FidelityFX Super Resolution 1 (MIT), compiled into the upscaling shaders - Copyright (c) 2021 Advanced Micro
+  Devices, Inc. - https://github.com/GPUOpen-Effects/FidelityFX-FSR (license: AMD-FidelityFX-FSR1-MIT.txt)
 - MinGW-w64 14.0.0 runtime and winpthreads, statically linked by the compiler (licenses: MinGW-w64-runtime.txt,
   MinGW-w64-winpthreads.txt) - https://www.mingw-w64.org
 - The GCC runtime libraries (libstdc++, libgcc) are linked under the GCC Runtime Library Exception.

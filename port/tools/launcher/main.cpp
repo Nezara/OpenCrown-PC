@@ -2,7 +2,6 @@
 // user's dump folder, edits input.ini (bindings shared with dcp_run via tools/common/input_defaults.h), sets display
 // options and starts dcp_run.exe (next to this exe) without a console, logging to <user dir>/logs/last_run.log.
 // Settings: <user dir>/launcher.ini (key = value). --selftest: draw a few frames and exit (0 = ok; writes nothing but
-// a temporary input.ini check). --tab <name>: open that page first.
 // Online page (net.md 11.3): lobby URL, player name, UPnP, "Test connection" (net/online_check.h); settings reach
 // dcp_run as environment. Friends there (lobby_protocol.md 4.2, net/friends.h): own friend code, add by code, requests,
 // list. Save Folder page: DCP_SAVE_ROOT. The story / tutorial skip questions are always on (DCP_STORY_SKIP /
@@ -103,6 +102,10 @@ struct Settings {
     bool fullscreen = false;
     bool uhd = false;  // 4K rendering (PS4 Pro mode, dcp_run --4k)
     std::string renderer = "auto";  // dcp_run --renderer: auto (SDL GPU, OpenGL if that fails) | gpu | gl
+    bool vsync = false;  // dcp_run --vsync
+    bool fsr = false;    // dcp_run --fsr (FSR 1 upscale, SDL GPU)
+    int sharpening = 0;
+    std::string render_res = "native";
     int width = 1280, height = 720;
     std::string language = "en";  // game language, passed as DCP_LANGUAGE (hle/services.cpp system_language)
     // Online (passed as DCP_LOBBY / DCP_NP_NAME / DCP_UPNP; the game's own online menu uses them)
@@ -131,6 +134,10 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "fullscreen") s.fullscreen = v == "1" || v == "true";
         else if (k == "uhd") s.uhd = v == "1" || v == "true";
         else if (k == "renderer") s.renderer = v == "gpu" || v == "gl" ? v : "auto";
+        else if (k == "vsync") s.vsync = v == "1" || v == "true";
+        else if (k == "fsr") s.fsr = v == "1" || v == "true";
+        else if (k == "sharpening") s.sharpening = std::clamp(std::atoi(v.c_str()), 0, 100);
+        else if (k == "render_res") s.render_res = v == "720p" || v == "1440p" || v == "2160p" || v == "window" ? v : "native";
         else if (k == "width") s.width = std::clamp(std::atoi(v.c_str()), 320, 16384);
         else if (k == "height") s.height = std::clamp(std::atoi(v.c_str()), 180, 16384);
         else if (k == "language") s.language = v;
@@ -150,7 +157,8 @@ void save_settings(const std::string& path, const Settings& s) {
     o << "# OpenCrownPC Launcher settings\n"
       << "dump = " << s.dump << "\nsaves = " << s.saves
       << "\nsaves_chosen = " << (s.saves_chosen ? "true" : "false") << "\nuhd = " << (s.uhd ? "true" : "false")
-      << "\nrenderer = " << s.renderer << "\nfullscreen = " << (s.fullscreen ? "true" : "false") << "\nwidth = " << s.width
+      << "\nrenderer = " << s.renderer << "\nvsync = " << (s.vsync ? "true" : "false")
+      << "\nfsr = " << (s.fsr ? "true" : "false") << "\nsharpening = " << s.sharpening << "\nrender_res = " << s.render_res << "\nfullscreen = " << (s.fullscreen ? "true" : "false") << "\nwidth = " << s.width
       << "\nheight = " << s.height << "\nlanguage = " << s.language << "\nlobby = " << s.lobby << "\nname = " << s.name
       << "\nupnp = " << (s.upnp ? "true" : "false") << "\nnet_trace = " << (s.net_trace ? "true" : "false")
       << "\ncheck_updates = " << (s.check_updates ? "true" : "false")
@@ -447,6 +455,19 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
     if (s.fullscreen) cmd += " --fullscreen";
     if (s.uhd) cmd += " --4k";
     cmd += " --renderer " + s.renderer;
+    if (s.vsync) cmd += " --vsync";
+    if (s.fsr && !s.uhd) cmd += " --fsr";
+    if (s.sharpening > 0) {
+        char sh[32];
+        std::snprintf(sh, sizeof sh, " --sharpen %.2f", 2.0f * (1.0f - s.sharpening / 100.0f));
+        cmd += sh;
+    }
+    if (!s.uhd) {
+        if (s.render_res == "720p") cmd += " --scale 0.6667";
+        else if (s.render_res == "1440p") cmd += " --scale 1.3333";
+        else if (s.render_res == "2160p") cmd += " --scale 2";
+        else if (s.render_res == "window") cmd += " --scale window";
+    }
     cmd += " --size " + std::to_string(s.width) + "x" + std::to_string(s.height);
 
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
@@ -555,6 +576,11 @@ void apply_theme(float scale) {
     c[ImGuiCol_Button] = ImVec4(0.32f, 0.21f, 0.12f, 0.85f);
     c[ImGuiCol_ButtonHovered] = ImVec4(0.50f, 0.34f, 0.17f, 0.95f);
     c[ImGuiCol_ButtonActive] = ImVec4(0.62f, 0.43f, 0.20f, 1);
+    c[ImGuiCol_Tab] = ImVec4(0.32f, 0.21f, 0.12f, 0.70f);  // Settings page tabs (Display / Controls)
+    c[ImGuiCol_TabHovered] = ImVec4(0.50f, 0.34f, 0.17f, 0.95f);
+    c[ImGuiCol_TabSelected] = ImVec4(0.62f, 0.43f, 0.20f, 1);
+    c[ImGuiCol_TabSelectedOverline] = kGold;
+    c[ImGuiCol_TabDimmed] = c[ImGuiCol_Tab], c[ImGuiCol_TabDimmedSelected] = c[ImGuiCol_TabSelected];
     c[ImGuiCol_TableHeaderBg] = ImVec4(0.20f, 0.14f, 0.08f, 0.80f);
     c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
     c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 0.9f, 0.7f, 0.04f);
@@ -1083,6 +1109,8 @@ int main(int argc, char** argv) {
     int capture = -1;      // index into ctl.binds awaiting a key / mouse button
     bool first = true;
     int page = 0;          // index into the page names (sidebar)
+    int settings_tab = 2;
+    int settings_select = 0;
     std::string dump_buf = set.dump;
     std::vector<Check> checks = validate_dump(set.dump);
     int frames = 0;
@@ -1168,10 +1196,15 @@ int main(int argc, char** argv) {
                                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
                                             ImGuiWindowFlags_NoBackground);
         const char* names[] = {"Game", "Controls", "Display", "Online", "Save Folder", "Report a Bug", "Update"};
-        const int order[] = {0, 4, 1, 2, 3, 5};  // sidebar order; indexes names (Update sits at the bottom)
-        if (first)
+        constexpr int kSettings = -1;
+        const int order[] = {0, 4, kSettings, 3, 5};
+        auto in_settings = [](int t) { return t == 1 || t == 2; };
+        if (first) {
             for (int t = 0; t < 7; ++t)
                 if (_stricmp(names[t], first_tab.c_str()) == 0) page = t;
+            if (_stricmp(first_tab.c_str(), "Settings") == 0) page = 2;
+            if (in_settings(page)) settings_tab = page, settings_select = page;
+        }
 
         // Sidebar: logo, navigation, readiness.
         const float side_w = 230 * scale;
@@ -1195,12 +1228,14 @@ int main(int argc, char** argv) {
             ImGui::Dummy(ImVec2(0, 6 * scale));
             if (font_nav) ImGui::PushFont(font_nav);
             for (int t : order) {
-                const bool sel = page == t;
+                const bool sel = t == kSettings ? in_settings(page) : page == t;
                 ImVec2 p = ImGui::GetCursorScreenPos();
                 ImGui::PushStyleColor(ImGuiCol_Text, sel ? kGold : kParchment);
-                if (ImGui::Selectable((std::string("   ") + names[t] + "##nav").c_str(), sel, 0,
-                                      ImVec2(0, ImGui::GetTextLineHeight() + 12 * scale)))
-                    page = t;
+                if (ImGui::Selectable((std::string("   ") + (t == kSettings ? "Settings" : names[t]) + "##nav").c_str(),
+                                      sel, 0, ImVec2(0, ImGui::GetTextLineHeight() + 12 * scale))) {
+                    if (t != kSettings) page = t;
+                    else if (!in_settings(page)) page = settings_tab, settings_select = settings_tab;  // last tab used
+                }
                 ImGui::PopStyleColor();
                 if (sel)  // gold marker at the left edge of the selected entry
                     ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + 4 * scale),
@@ -1255,7 +1290,20 @@ int main(int argc, char** argv) {
         ImGui::PopStyleColor();
         {
             const int t = page;
-            heading(font_head, names[t]);
+            heading(font_head, in_settings(t) ? "Settings" : names[t]);
+            if (in_settings(t)) {
+                if (ImGui::BeginTabBar("##settings")) {
+                    for (int s : {2, 1}) {  // Display, Controls
+                        if (ImGui::BeginTabItem(names[s], nullptr, settings_select == s ? ImGuiTabItemFlags_SetSelected : 0)) {
+                            page = settings_tab = s;
+                            ImGui::EndTabItem();
+                        }
+                    }
+                    ImGui::EndTabBar();
+                }
+                settings_select = 0;
+                ImGui::Spacing();
+            }
             if (t == 0) {
                 ImGui::TextUnformatted("Personal game dump folder (your own copy; holds eboot.bin and the .CPK data files):");
                 ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Browse...").x - ImGui::GetStyle().FramePadding.x * 4);
@@ -1359,9 +1407,61 @@ int main(int argc, char** argv) {
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(220 * scale);
                     if (ImGui::Combo("##renderer", &r, kRendererNames, 3)) set.renderer = kRendererIds[r];
-                    ImGui::TextColored(kDim, "Auto uses SDL GPU and switches to OpenGL if the graphics driver cannot run it.\n"
-                                             "Try OpenGL if the picture stays black or the game does not start.");
                 }
+                ImGui::Spacing();
+                {
+                    static const char* const kResIds[] = {"720p", "native", "1440p", "2160p", "window"};
+                    static const char* const kResNames[] = {"720p", "1080p (native)", "1440p", "4K", "Match window"};
+                    int r = 1;
+                    for (int i = 0; i < 5; ++i)
+                        if (set.render_res == kResIds[i]) r = i;
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Render resolution:");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(220 * scale);
+                    if (set.uhd) {
+                        int four_k = 3;
+                        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.45f, 0.45f, 0.35f));
+                        ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 0.35f);
+                        ImGui::BeginDisabled();
+                        ImGui::Combo("##render_res", &four_k, kResNames, 5);
+                        ImGui::EndDisabled();
+                        ImGui::PopStyleVar();
+                        ImGui::PopStyleColor();
+                    } else if (ImGui::Combo("##render_res", &r, kResNames, 5)) {
+                        set.render_res = kResIds[r];
+                    }
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip(set.uhd ? "Set by 4K rendering." :
+                                          "The size the game is drawn at before it is scaled to the window. Higher is\n"
+                                          "sharper and needs a faster GPU; 720p helps slow GPUs (with FSR it looks best).");
+                }
+                ImGui::Spacing();
+                ImGui::Checkbox("VSync", &set.vsync);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("No tearing. On a 60 Hz display the game also keeps in step with the screen, so\n"
+                                      "scrolling has no small hitch every few seconds. Leave it off on a G-Sync / FreeSync\n"
+                                      "display. Adds a little input delay.");
+                if (set.uhd) {
+                    bool off = false;
+                    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.45f, 0.45f, 0.45f, 0.35f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 0.35f);
+                    ImGui::BeginDisabled();
+                    ImGui::Checkbox("AMD FidelityFX Super Resolution 1 (FSR 1) upscaling", &off);
+                    ImGui::EndDisabled();
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::Checkbox("AMD FidelityFX Super Resolution 1 (FSR 1) upscaling", &set.fsr);
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Sharper upscaling when the window is larger than the game's picture (for example\n"
+                                      "1080p rendering on a 1440p or 4K screen). SDL GPU renderer only.");
+                if (set.uhd) ImGui::TextColored(kDim, "Not used with 4K rendering: the picture is already 4K, so there is nothing to upscale.");
+                ImGui::SetNextItemWidth(220 * scale);
+                ImGui::SliderInt("Sharpening", &set.sharpening, 0, 100, set.sharpening ? "%d%%" : "Off");
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("FSR 1 sharpening (RCAS), with or without FSR upscaling. SDL GPU renderer only.");
                 ImGui::Spacing();
                 ImGui::TextUnformatted("Window size:");
                 static const int kPresets[][2] = {{1280, 720}, {1600, 900}, {1920, 1080}};
@@ -1387,9 +1487,6 @@ int main(int argc, char** argv) {
                     ImGui::InputInt("Height", &set.height, 0);
                     set.width = std::clamp(set.width, 320, 16384), set.height = std::clamp(set.height, 180, 16384);
                 }
-                ImGui::Spacing();
-                ImGui::TextColored(kDim, "Fullscreen uses the desktop resolution; the window size applies when windowed.\n"
-                                         "In game, F1 shows frame statistics in the title bar.");
                 ImGui::Spacing();
                 // The languages the game's own files carry (DRACRO_US.CPK message sheets + localised menus).
                 static const char* const kLangIds[] = {"en", "fr", "es", "de", "it"};

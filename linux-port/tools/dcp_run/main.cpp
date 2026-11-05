@@ -276,11 +276,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: dcp_run <eboot.bin> [--dry] [--input script.txt] [--frames N]\n"
                              "               [--render] [--window] [--fullscreen] [--size WxH] [--4k]\n"
                              "               [--shot out.png] [--shots N=a.png,M=b.png] [--renderer auto|gpu|gl]\n"
+                             "               [--vsync] [--fsr] [--sharpen S] [--scale S|window]\n"
                              "  --render: replay the game's frames (hidden window); --window shows them;\n"
                              "  --renderer: auto = SDL GPU (Vulkan), OpenGL if that fails (default; env\n"
                              "  DCP_RENDERER when the argument is absent); gpu = SDL GPU or fail; gl = OpenGL 3.3\n"
                              "  --fullscreen: borderless desktop fullscreen (implies --window); --size: window size (1280x720)\n"
                              "  --4k: PS4 Pro mode, the game renders at 3840x2160\n"
+                             "  --vsync, --fsr, --sharpen S, --scale S|window: display options (launcher Settings)\n"
                              "  --shot writes the frame at vblank --frames N and exits; --shots several (vblank=path)\n"
                              "  user dir (input.ini, saves/): ${XDG_DATA_HOME:-~/.local/share}/OpenCrown (DCP_USER_DIR\n"
                              "  overrides; DCP_SAVE_ROOT overrides the saves folder alone)\n");
@@ -289,7 +291,10 @@ int main(int argc, char** argv) {
     bool dry = false;
     std::string input_path;
     uint64_t max_frames = 0;
-    bool render = false, window = false, fullscreen = false, neo = false;
+    bool render = false, window = false, fullscreen = false, neo = false, vsync = false, fsr = false;
+    float sharpness = -1;  // --sharpen (off)
+    float scale = 1;       // --scale
+    bool scale_window = false;
     int width = 1280, height = 720;
     std::string shot, renderer;
     std::vector<std::pair<uint64_t, std::string>> shots;
@@ -301,6 +306,27 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--window") == 0) render = window = true;
         else if (std::strcmp(argv[i], "--fullscreen") == 0) render = window = fullscreen = true;
         else if (std::strcmp(argv[i], "--4k") == 0) neo = true;
+        else if (std::strcmp(argv[i], "--vsync") == 0) vsync = true;
+        else if (std::strcmp(argv[i], "--fsr") == 0) fsr = true;
+        else if (std::strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
+            ++i;
+            if (std::strcmp(argv[i], "window") == 0) {
+                scale_window = true;
+            } else {
+                scale = std::strtof(argv[i], nullptr);
+                if (!(scale >= 0.25f && scale <= 4)) {
+                    std::fprintf(stderr, "dcp_run: bad --scale (0.25..4 or window)\n");
+                    return 2;
+                }
+            }
+        }
+        else if (std::strcmp(argv[i], "--sharpen") == 0 && i + 1 < argc) {
+            sharpness = std::strtof(argv[++i], nullptr);
+            if (!(sharpness >= 0 && sharpness <= 4)) {
+                std::fprintf(stderr, "dcp_run: bad --sharpen (0..4)\n");
+                return 2;
+            }
+        }
         else if (std::strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
             renderer = argv[++i];
             if (renderer != "auto" && renderer != "gpu" && renderer != "gl") {
@@ -453,6 +479,9 @@ int main(int argc, char** argv) {
                 renderer = e && *e ? e : "auto";
             }
             ro.renderer = renderer;
+            ro.vsync = vsync, ro.fsr = fsr, ro.sharpness = sharpness;
+            ro.scale = scale, ro.scale_window = scale_window;
+            ro.game_w = neo ? 3840 : 1920, ro.game_h = neo ? 2160 : 1080;
             finish(run_render_loop(ro, t, &finish));
         }
 #endif

@@ -7,5 +7,7 @@ in the licenses/ folder next to this file.
 - Mbed TLS 3.6.2 (Apache License 2.0) - https://github.com/Mbed-TLS/mbedtls
 - miniupnpc 2.2.8 (BSD 3-Clause) - Copyright (c) Thomas Bernard - https://miniupnp.tuxfamily.org
 - Dear ImGui 1.91.9b (MIT) - Copyright (c) Omar Cornut - https://github.com/ocornut/imgui
+- AMD FidelityFX Super Resolution 1 (MIT), compiled into the upscaling shaders - Copyright (c) 2021 Advanced Micro
+  Devices, Inc. - https://github.com/GPUOpen-Effects/FidelityFX-FSR (license: AMD-FidelityFX-FSR1-MIT.txt)
 
 No game files are included. You need your own dump of the game.

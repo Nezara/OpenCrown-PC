@@ -73,7 +73,8 @@ public:
         virtual void prepare(void* cmd) = 0;              // SDL_GPUCommandBuffer*, outside any pass
         virtual void render(void* cmd, void* pass) = 0;   // inside the swapchain render pass
     };
-    virtual void present(TexId t, int tw, int th, int w, int h, Overlay* overlay) = 0;
+    virtual void set_upscaler(bool, float) {}
+    virtual bool present(TexId t, int tw, int th, int w, int h, Overlay* overlay) = 0;
 };
 
 std::unique_ptr<Device> make_gl_device();

@@ -1,6 +1,5 @@
 // libSceVideoOut: no display yet, but the game loop is paced. sceVideoOutWaitVblank sleeps to the next 1/60 s
 // boundary (QPC) and is the frame clock (vblank_count) used by the input script and --frames. Flips are counted in
-// gnm.cpp (they arrive through sceGnmSubmitAndFlipCommandBuffers).
 #include <atomic>
 #include <cstring>
 
@@ -15,6 +14,11 @@ namespace {
 std::atomic<uint64_t> g_vblanks{0};
 LARGE_INTEGER g_freq;
 int64_t g_next = 0;      // QPC of the next vblank (main thread only)
+std::atomic<int64_t> g_period{0};
+std::atomic<bool> g_lock{false};
+std::atomic<uint64_t> g_presents{0};
+std::atomic<int64_t> g_last_present{0};
+HANDLE g_present_event = nullptr;  // auto-reset, set by display_vblank
 
 constexpr int32_t kVideoHandle = 1;
 
@@ -56,19 +60,38 @@ DCP_SYSV int32_t sceVideoOutAddFlipEvent(void*, int32_t, void*) { return kOk; }
 DCP_SYSV int32_t sceVideoOutAddVblankEvent(void*, int32_t, void*) { return kOk; }
 DCP_SYSV int32_t sceVideoOutSetFlipRate(int32_t, int32_t) { return kOk; }
 
-DCP_SYSV int32_t sceVideoOutWaitVblank(int32_t) {
-    const int64_t period = g_freq.QuadPart / 60;
+bool wait_present(int64_t period) {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    if (g_next == 0 || now.QuadPart - g_next > 4 * period) g_next = now.QuadPart + period;  // first call / long stall
-    int64_t ms_left = (g_next - now.QuadPart) * 1000 / g_freq.QuadPart;
-    if (ms_left > 1) Sleep(DWORD(ms_left - 1));
-    for (;;) {
+    if (now.QuadPart - g_last_present.load() > 4 * period) return false;
+    const uint64_t seen = g_presents.load();
+    const int64_t until = now.QuadPart + period * 3 / 2;
+    while (g_presents.load() == seen) {
         QueryPerformanceCounter(&now);
-        if (now.QuadPart >= g_next) break;
-        SwitchToThread();
+        int64_t ms = (until - now.QuadPart) * 1000 / g_freq.QuadPart;
+        if (ms <= 0) return false;
+        WaitForSingleObject(g_present_event, DWORD(ms));
     }
-    g_next += period;
+    QueryPerformanceCounter(&now);
+    g_next = now.QuadPart + period;  // the timer continues from here if presents stop
+    return true;
+}
+
+DCP_SYSV int32_t sceVideoOutWaitVblank(int32_t) {
+    const int64_t period = g_period.load() ? g_period.load() : g_freq.QuadPart / 60;
+    if (!g_lock.load() || !wait_present(period)) {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        if (g_next == 0 || now.QuadPart - g_next > 4 * period) g_next = now.QuadPart + period;  // first call / long stall
+        int64_t ms_left = (g_next - now.QuadPart) * 1000 / g_freq.QuadPart;
+        if (ms_left > 1) Sleep(DWORD(ms_left - 1));
+        for (;;) {
+            QueryPerformanceCounter(&now);
+            if (now.QuadPart >= g_next) break;
+            SwitchToThread();
+        }
+        g_next += period;
+    }
     uint64_t v = ++g_vblanks;
     if (config().max_frames && v >= config().max_frames) {
         std::fprintf(stderr, "reached --frames %llu (flips %llu)\n", (unsigned long long)v,
@@ -83,8 +106,23 @@ DCP_SYSV int32_t sceVideoOutWaitVblank(int32_t) {
 uint64_t vblank_count() { return g_vblanks.load(); }
 uint64_t vblank_count_public() { return g_vblanks.load(); }
 
+void set_display_sync(double hz, bool lock) {
+    if (!g_freq.QuadPart) QueryPerformanceFrequency(&g_freq);
+    if (!g_present_event) g_present_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
+    g_period = hz > 0 ? int64_t(double(g_freq.QuadPart) / hz) : 0;
+    g_lock = lock && g_present_event;
+}
+
+void display_vblank() {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    g_last_present = now.QuadPart;
+    ++g_presents;
+    if (g_present_event) SetEvent(g_present_event);
+}
+
 void register_video() {
-    QueryPerformanceFrequency(&g_freq);
+    if (!g_freq.QuadPart) QueryPerformanceFrequency(&g_freq);
     const char* v = "libSceVideoOut";
     REG(v, sceVideoOutOpen); REG(v, sceVideoOutClose); REG(v, sceVideoOutGetResolutionStatus);
     REG(v, sceVideoOutSetBufferAttribute); REG(v, sceVideoOutRegisterBuffers); REG(v, sceVideoOutAddFlipEvent);

@@ -3,10 +3,10 @@ OpenCrown for Linux / Steam Deck - test build (no game files included - you need
 Needs: a 64-bit Linux with glibc 2.35 or newer (SteamOS 3.5+, Ubuntu 22.04+, Debian 12+, Fedora, Arch, ...)
 and Vulkan or OpenGL 3.3. The game draws with Vulkan (SDL GPU) when the graphics driver has it and switches
 to OpenGL by itself when it does not. If the picture stays black or the game does not start, set the
-launcher's Settings > Renderer to OpenGL.
+launcher's Settings > Display > Renderer to OpenGL.
 
 Room text chat (online rooms only; switch it off on the launcher's Online page): press Enter (the "Open room
-chat" key on the Controls page) to type, Enter sends, Esc closes. On a Steam Deck: double tap the screen
+chat" key on Settings > Controls) to type, Enter sends, Esc closes. On a Steam Deck: double tap the screen
 and hold (tap, then touch and hold the same spot); Steam's on-screen keyboard opens with the chat box. B closes the chat box without sending. /mute <name> in chat
 mutes a player.
 
@@ -25,7 +25,7 @@ Steam Deck:
    trackpad moves the fairy pointer and its click interacts. Without Steam Input (controller settings >
    disable Steam Input): right trackpad = fairy pointer, click = interact, left trackpad click = town map.
    Tapping the touch screen sends the fairy to that spot; a short tap also interacts.
-   Both can be switched off on the launcher's Controls page.
+   Both can be switched off on the launcher's Settings > Controls tab.
 
 Steam Deck Game Mode (no keyboard or mouse needed):
 - The launcher works with the controller: D-pad / left stick move, A selects, B goes back (or closes
@@ -38,7 +38,7 @@ Steam Deck Game Mode (no keyboard or mouse needed):
 - Text fields (player name, friend code, bug note, folder path): selecting one with the controller or
   the touch screen opens Steam's on-screen keyboard. If it does not appear, press Steam + X. Friend
   codes can also be pasted with the Paste button.
-- Key bindings on the Controls page need a keyboard or mouse (B cancels); the game's controller
+- Key bindings on Settings > Controls need a keyboard or mouse (B cancels); the game's controller
   buttons do not need setting up.
 
 Updates: the launcher checks GitHub for a newer release when it starts (can be switched off). The Update

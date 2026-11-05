@@ -23,6 +23,8 @@ std::string default_save_root();
 
 void register_all(const Config& cfg);
 uint64_t vblank_count_public();  // frame clock (vblanks waited), for host-side diagnostics
+void set_display_sync(double hz, bool lock);
+void display_vblank();
 
 // Gives the calling thread an alternate signal stack (sigaltstack), so fault handlers (dcp_run's crash report,
 // texwatch) still run when the thread's own stack is exhausted. Game threads get one at start; call it on host threads

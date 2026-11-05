@@ -23,6 +23,8 @@ std::string default_save_root();
 
 void register_all(const Config& cfg);
 uint64_t vblank_count_public();  // frame clock (vblanks waited), for host-side diagnostics
+void set_display_sync(double hz, bool lock);
+void display_vblank();
 
 // TLS blocks for modules with PT_TLS (DTPMOD64 ids start at 1). Returns the module id.
 uint32_t add_tls_module(const void* init, uint64_t filesz, uint64_t memsz, uint64_t align);

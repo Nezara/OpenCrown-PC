@@ -36,7 +36,8 @@ All decoding stays in `backend.cpp`; only the device differs.
   backend, so its VS does not negate y (the GL VS does); both keep targets top row first, uv v = 0 = row 0, scissor y
   from row 0. Its VS also remaps z from GL's [-w, w] to [0, w] so the same primitives are clipped. A draw that samples
   its own target (undefined in GL) samples a copy taken just before it (logged). Present: swapchain mailbox, else
-  immediate, else vsync (the game paces itself). Readback (`--shot`, F12): download transfer buffer + fence.
+  immediate, else vsync (the game paces itself). Optional VSync, FSR 1, sharpening and render
+  resolution (details are restricted). Readback (`--shot`, F12): download transfer buffer + fence.
 - **OpenGL 3.3** (`gl_device.cpp`): executes each draw at once, as before the split (output byte-identical to the
   pre-split replay). Used for `--renderer gl` and as the automatic fallback: in auto, any SDL GPU failure (no device,
   no swapchain, a shader / pipeline / texture format the driver rejects) is logged as `render: OpenGL fallback:

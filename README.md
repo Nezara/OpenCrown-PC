@@ -57,7 +57,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 - ⌨️ **Keyboard and mouse** with mouse attacks and the fairy pointer on the mouse, all rebindable.
 - 🔄 **Dynamic button prompts.** On-screen prompts switch between PlayStation buttons and your keyboard / mouse keys, following whichever you used last, and show your own bindings.
 - 💾 **PS4/PS5-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4/PS5 progress over and take it back.
-- 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with room codes, friend codes and **room text chat**.
+- 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with friend codes and **room text chat**.
 - 🎥 **Separate cameras online** *(new in 1.0.8)*. In online adventures each player's screen follows their own character, and fights hold the party together until the enemies are beaten. Works on Windows, Linux and Android. ([details](#separate-cameras))
 - 🌍 **Fan translations and mods.** Modified game archives (for example a fan translation) are accepted.
 - 🇯🇵 **Japanese button layout** option: Circle confirms and Cross cancels in menus.
@@ -257,7 +257,7 @@ The `dcp_run.exe` next to the launcher is the program that actually runs the gam
 
 Online play uses **the game's own matchmaking and netcode**. The lobby server only introduces players to each other:
 
-1. **Host or join a room.** When you go online in the game, it opens a room on the lobby server. Others can find it in the room list, or join with a **room code** or from your **friends** list.
+1. **Host or join a room.** When you go online in the game, it opens a room on the lobby server. Others can find it in the room list or join from your **friends** list.
 2. **Handshake.** The server swaps the players' network addresses so they can reach each other.
 3. **Peer to peer.** The players connect **directly** over UDP. All gameplay traffic goes between the players, never through the server. NAT traversal uses STUN and hole punching, plus UPnP if your router allows it.
 
@@ -265,7 +265,7 @@ Online play uses **the game's own matchmaking and netcode**. The lobby server on
 
 The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-worker`](server/lobby-worker). Anyone can run their own and point the **Online** page at it.
 
-**Friends:** each player has a friend code like `ABCD-1234`. Add someone by their code on the **Online** page. Once they accept, you can see when they're online and use *Join Friend's Room* in the game.
+**Friends:** each player has a friend code like `ABCD-1234`. Add someone by their code on the **Online** page. Once they accept, you can see when they're online and use *Join Friend's Room* in the game. This works across versions: Windows, Linux and Android players can join each other this way. Android players need OpenCrown Mobile 0.1.9 or newer.
 
 > [!NOTE]
 > Online play unlocks at the same point in the story as on PS4/PS5. Taking the story skip on a new character gets you there right away.
@@ -291,8 +291,8 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 
 This is an early release from a hobby project, so expect a few rough edges:
 
-- **Two players behind the same router** may not be able to connect to each other yet. Different houses work fine.
 - **Very strict networks** (some mobile or carrier-grade NAT connections) can stop the direct connection. There's no relay server yet.
+- **Join Friend's Room between Mobile and PC** is new in Mobile 0.1.9 and has only been tested with both players on the same network so far. It should work across different networks too; if it doesn't, a bug report helps.
 - **Friend status** can take about 10 seconds to update.
 - **Windows user names with non-English characters** (e.g. `C:\Users\Jürgen`) can break file paths. Choosing a save folder with a plain path works around it.
 - **Odd or unusual text can appear briefly on scene transitions.** The PS4's system text library isn't included, so some of the text it would supply has to be swapped for generic stand-in text. Most of these cases have been caught and fixed, but a few outliers may still slip through. If you spot one, a bug report saying where it happened helps.
@@ -345,7 +345,7 @@ Neither. No game source code is reconstructed, and nothing from the game is rebu
 <details>
 <summary><b>Is this online?</b></summary>
 
-Yes. Online co-op for up to 4 players works on every platform, with friend codes, room codes, the room list and room text chat. It's free, needs no PlayStation Network account, and the players connect directly to each other once the OpenCrown lobby has introduced them. See [Playing online](#playing-online).
+Yes. Online co-op for up to 4 players works on every platform, with friend codes, the room list and room text chat. It's free, needs no PlayStation Network account, and the players connect directly to each other once the OpenCrown lobby has introduced them. See [Playing online](#playing-online).
 </details>
 
 <details>

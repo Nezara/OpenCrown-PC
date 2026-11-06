@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(DragonsCrownPort C CXX)
-set(OPENCROWN_VERSION "1.0.9")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
+set(OPENCROWN_VERSION "1.0.9.1")  # shown in the launcher, compared with GitHub releases by its updater; bump per release
 # Test builds only (updater end-to-end test): -DOPENCROWN_VERSION_OVERRIDE=9.9.9. Never for a release.
 set(OPENCROWN_VERSION_OVERRIDE "" CACHE STRING "Override OPENCROWN_VERSION (updater tests only)")
 if(OPENCROWN_VERSION_OVERRIDE)
@@ -183,6 +183,8 @@ add_test(NAME loader COMMAND test_loader)
 add_executable(test_cpu_compat tests/test_cpu_compat.cpp)  # MOVBE / BMI1 / LZCNT replacements vs the native instructions
 target_link_libraries(test_cpu_compat PRIVATE dcp_loader)
 add_test(NAME cpu_compat COMMAND test_cpu_compat)
+add_executable(test_pad_mapping tests/test_pad_mapping.cpp)  # launcher controller setup lines
+add_test(NAME pad_mapping COMMAND test_pad_mapping)
 add_executable(test_hle tests/test_hle.cpp)
 target_link_libraries(test_hle PRIVATE dcp_hle)
 add_test(NAME hle COMMAND test_hle)

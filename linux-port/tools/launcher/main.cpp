@@ -61,6 +61,7 @@ extern char** environ;
 #include "../common/game_version.h"
 #include "../common/steam_video.h"
 #include "../common/input_defaults.h"
+#include "pad_setup.h"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl3.h"
@@ -1737,6 +1738,8 @@ int main(int argc, char** argv) {
     bool relaunched = false;
     bool ask_saves = !set.saves_chosen && !selftest;  // first start: where should saves go?
     int capture = -1;      // index into ctl.binds awaiting a key / mouse button
+    dcp::PadSetup pad_setup;
+    bool reset_pad_setups = false;
     bool first = true;
     int page = 0;          // index into the page names (sidebar)
     int settings_tab = 2;
@@ -1851,7 +1854,7 @@ int main(int argc, char** argv) {
 
         // Gamepad: read (closed while the game runs), then decide this frame's own actions from the state ImGui ended
         // the last frame with (B on a page = back to the sidebar, B in a dialog = close it, L1/R1 = page, Start = Play).
-        pad.update(game.proc == 0);
+        pad.update(game.proc == 0 && !pad_setup.capturing());
         if (pad.touched) {
             input = Input::Pad;
             if (!pad_seen) pad_seen = true, pad.swallow(), nav_to_sidebar = true;  // first press: show the focus only
@@ -2139,14 +2142,37 @@ int main(int argc, char** argv) {
                     ImGui::SetNextItemWidth(300 * scale);
                     ImGui::Combo("Mouse buttons press game buttons", &ctl.mouse_attacks, kAttack, 3);
                 }
-                if (ImGui::Button("Reset to defaults")) { ctl = default_controls(); status = "Defaults restored (not saved yet)."; }
+                if (ImGui::Button("Reset to defaults")) {
+                    ctl = default_controls();
+                    reset_pad_setups = true;
+                    status = "Defaults restored, controllers too (not saved yet).";
+                }
                 ImGui::SameLine();
-                if (ImGui::Button("Save")) status = save_controls(input_path, ctl) ? "Saved " + input_path
-                                                                                   : "Could not write " + input_path;
+                if (ImGui::Button("Save")) {
+                    status = save_controls(input_path, ctl) ? "Saved " + input_path
+                                                            : "Could not write " + input_path;
+                    if (reset_pad_setups) {
+                        const std::string pads = user + "/gamepad_mappings.txt";
+                        if (SDL_GetPathInfo(pads.c_str(), nullptr) && !SDL_RemovePath(pads.c_str()))
+                            status = "Could not remove " + pads;
+                        reset_pad_setups = false;
+                    }
+                }
                 ImGui::SameLine();
-                if (ImGui::Button("Revert")) { ctl = load_controls(input_path); status = "Reloaded from input.ini."; }
+                if (ImGui::Button("Revert")) {
+                    ctl = load_controls(input_path);
+                    reset_pad_setups = false;
+                    status = "Reloaded from input.ini.";
+                }
                 ImGui::SameLine();
                 ImGui::TextColored(kDim, "%s", status.c_str());
+                if (ImGui::Button("Controller setup...")) {
+                    reset_pad_setups = false;
+                    pad_setup.open(user + "/gamepad_mappings.txt");
+                }
+                ImGui::SameLine();
+                ImGui::TextColored(kDim, "For controllers whose buttons do the wrong thing in the game.");
+                pad_setup.draw(scale, kDim);
             } else if (t == 2) {
                 int mode = set.fullscreen ? 1 : 0;
                 ImGui::RadioButton("Windowed", &mode, 0);

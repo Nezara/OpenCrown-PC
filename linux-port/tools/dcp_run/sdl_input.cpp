@@ -271,7 +271,16 @@ private:
         }
         SDL_free(ids);
         steam_pad_ = !pads.empty() && dcp::touch::is_steam_virtual_pad(SDL_GetGamepadVendor(pads[0]), SDL_GetGamepadProduct(pads[0]));        std::lock_guard<std::mutex> lk(mu_);
-        if (pads.size() != pads_.size()) std::fprintf(stderr, "input: %zu gamepad(s)\n", pads.size());
+        if (pads.size() != pads_.size()) {
+            std::fprintf(stderr, "input: %zu gamepad(s)\n", pads.size());
+            for (SDL_Gamepad* g : pads) {
+                char* mapping = SDL_GetGamepadMapping(g);
+                const char* name = SDL_GetGamepadName(g);
+                std::fprintf(stderr, "input: %s (%04x:%04x): %s\n", name ? name : "?", SDL_GetGamepadVendor(g),
+                             SDL_GetGamepadProduct(g), mapping ? mapping : "no mapping");
+                SDL_free(mapping);
+            }
+        }
         pads_ = pads;
     }
 
@@ -517,6 +526,12 @@ SdlInputPump* install_sdl_input(const std::string& dir, bool wrap_script) {
     SDL_CreateDirectory(dir.c_str());
     std::string ini_path = dir + "/input.ini";
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) std::fprintf(stderr, "input: gamepads unavailable: %s\n", SDL_GetError());
+    // Launcher "Controller setup": replaces SDL's mapping for those controllers.
+    const std::string mappings_path = dir + "/gamepad_mappings.txt";
+    if (std::ifstream(mappings_path)) {
+        const int added = SDL_AddGamepadMappingsFromFile(mappings_path.c_str());
+        std::fprintf(stderr, "input: %s: %d controller setup(s)\n", mappings_path.c_str(), added);
+    }
     auto binds = parse(dcp::kInputDefaults, "defaults");
     std::ifstream f(ini_path);
     if (f) {

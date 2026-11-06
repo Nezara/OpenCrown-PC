@@ -196,7 +196,7 @@ Launcher settings are stored in `launcher.ini` next to your saves and logs.
 
 ## Controls
 
-Gamepads work out of the box with the PS4 layout. Keyboard and mouse defaults are below; everything can be changed on the **Controls** page.
+Gamepads work out of the box with the PS4 layout. Keyboard and mouse defaults are below; everything can be changed on the **Controls** page. If a controller's buttons do the wrong thing, run **Controller setup** on that page and press each button once.
 
 | Action | Default | | Action | Default |
 |---|---|---|---|---|

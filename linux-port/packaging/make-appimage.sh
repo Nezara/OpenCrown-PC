@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds dist/OpenCrown-<version>-x86_64.AppImage (launcher + dcp_run, no game files) + its .zsync, a copy under the
-# old name OpenCrown-Linux-<version>-x86_64.AppImage, and dist/README.txt. Upload all three files with the release.
+# Builds dist/OpenCrown-<version>-x86_64.AppImage (launcher + dcp_run, no game files) + its .zsync and dist/README.txt.
+# Upload the AppImage and the .zsync with the release.
 # Run on Ubuntu 22.04 (glibc 2.35 is then the minimum on the player's side; SteamOS 3.5+ is newer). Needs the build.sh
 # packages plus file + desktop-file-utils. appimagetool (pinned version, SHA-256 checked) is downloaded once into
 # ~/.cache/opencrown/ unless APPIMAGETOOL points at a copy.
@@ -64,8 +64,5 @@ upd="gh-releases-zsync|Nezara|OpenCrown-PC|latest|OpenCrown-*-x86_64.AppImage.zs
 out=$(cd "$out" && pwd)
 (cd "$out" && ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$tool" --no-appstream -u "$upd" "$app" "$out/$name")
 [ -f "$out/$name.zsync" ] || { echo "appimagetool wrote no $name.zsync" >&2; exit 1; }
-# Launchers up to 1.0.6 only look for OpenCrown-Linux-*: keep uploading this copy (no .zsync, so the pattern above
-# stays unambiguous) until few players are left on those versions.
-cp "$out/$name" "$out/OpenCrown-Linux-$ver-x86_64.AppImage"
 cp "$here/packaging/README.txt" "$out/README.txt"
-echo "built $out/$name ($(stat -c %s "$out/$name") B) + .zsync + OpenCrown-Linux-$ver-x86_64.AppImage"
+echo "built $out/$name ($(stat -c %s "$out/$name") B) + .zsync"

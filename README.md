@@ -59,6 +59,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 - 💾 **PS4/PS5-compatible saves.** Save files are byte-identical to the console's, so you can bring your PS4/PS5 progress over and take it back.
 - 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with friend codes and **room text chat**.
 - 🎥 **Separate cameras online** *(new in 1.0.8)*. In online adventures each player's screen follows their own character, and fights hold the party together until the enemies are beaten. Works on Windows, Linux and Android. ([details](#separate-cameras))
+- 🧑‍🎨 **Customize** *(new in 1.0.10, experimental)*. Edit Character has a new colour slot to recolour parts of your character and show or hide headgear; other PC/Linux players see your look online. Windows and Linux; its source isn't public yet.
 - 🌍 **Fan translations and mods.** Modified game archives (for example a fan translation) are accepted.
 - 🇯🇵 **Japanese button layout** option: Circle confirms and Cross cancels in menus.
 - ⏭️ **Optional story and tutorial skip** on new characters (details [below](#what-is-changed-in-the-game)).

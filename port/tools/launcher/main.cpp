@@ -2,6 +2,7 @@
 // user's dump folder, edits input.ini (bindings shared with dcp_run via tools/common/input_defaults.h), sets display
 // options and starts dcp_run.exe (next to this exe) without a console, logging to <user dir>/logs/last_run.log.
 // Settings: <user dir>/launcher.ini (key = value). --selftest: draw a few frames and exit (0 = ok; writes nothing but
+// --play: start the game with the saved settings, no launcher window.
 // Online page (net.md 11.3): lobby URL, player name, UPnP, "Test connection" (net/online_check.h); settings reach
 // dcp_run as environment. Friends there (lobby_protocol.md 4.2, net/friends.h): own friend code, add by code, requests,
 // list. Save Folder page: DCP_SAVE_ROOT. The story / tutorial skip questions are always on (DCP_STORY_SKIP /
@@ -40,6 +41,7 @@
 #include "../common/dump_check.h"
 #include "../common/game_version.h"
 #include "../common/input_defaults.h"
+#include "../common/save_check.h"
 #include "pad_setup.h"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
@@ -118,6 +120,7 @@ struct Settings {
     bool check_updates = true;  // ask GitHub for a newer launcher at start
     bool chat = true;  // room text chat (net/chat.h); off = DCP_CHAT=0, nothing sent or shown
     bool own_camera = true;  // separate cameras online
+    bool rumble = true;  // controller vibration (DCP_RUMBLE=0 off)
     bool confirm_circle = false;  // Japanese layout, Circle confirms / Cross cancels (DCP_CONFIRM=circle, hle/confirm_button.h)
 };
 
@@ -150,6 +153,7 @@ void load_settings(const std::string& path, Settings& s) {
         else if (k == "chat") s.chat = v == "1" || v == "true";
         else if (k == "own_camera") s.own_camera = v == "1" || v == "true";
         else if (k == "confirm") s.confirm_circle = v == "circle";
+        else if (k == "rumble") s.rumble = v == "1" || v == "true";
     }
 }
 
@@ -166,6 +170,7 @@ void save_settings(const std::string& path, const Settings& s) {
       << "\nchat = " << (s.chat ? "true" : "false")
       << "\nown_camera = " << (s.own_camera ? "true" : "false")
       << "\nconfirm = " << (s.confirm_circle ? "circle" : "cross")
+      << "\nrumble = " << (s.rumble ? "true" : "false")
       << "\n";
 }
 
@@ -510,6 +515,7 @@ bool start_game(Game& g, const Settings& s, const std::string& log_path) {
     set_env(L"DCP_CHAT", s.chat ? "" : "0");
     set_env(L"DCP_OWN_CAMERA", s.own_camera ? "" : "0");
     set_env(L"DCP_CONFIRM", s.confirm_circle ? "circle" : "");
+    set_env(L"DCP_RUMBLE", s.rumble ? "" : "0");
     if (s.net_trace) set_env(L"DCP_NET_TRACE", "1");  // off leaves an inherited DCP_NET_TRACE alone
     BOOL ok = CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE,
                              CREATE_NO_WINDOW | (have_list ? EXTENDED_STARTUPINFO_PRESENT : 0), nullptr, wdir.c_str(),
@@ -854,6 +860,50 @@ struct UpdateJob {
 const ImVec4 kGood(0.55f, 0.85f, 0.45f, 1), kBad(0.97f, 0.45f, 0.38f, 1), kWarn(0.98f, 0.62f, 0.30f, 1),
     kDim(0.66f, 0.62f, 0.55f, 1);
 
+// "Save file problem" (Play found unreadable saves, save_check.h). Returns true when the game should start now.
+// Move aside = rename to SAVEn.DAT.unreadable (bytes kept), so the game starts without that file. Play anyway only
+// for a checksum mismatch (an edited save may still load); an encrypted or cut file always crashes the title screen.
+bool draw_bad_saves(std::vector<dcp::save_check::Result>& bad, std::string& status, const std::string& save_dir,
+                    ImVec2 display) {
+    using dcp::save_check::Verdict;
+    ImGui::SetNextWindowSize(ImVec2(display.x * 0.75f, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(display.x * 0.5f, display.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("Save file problem", nullptr, ImGuiWindowFlags_NoResize)) return false;
+    bool start = false, only_damaged = true;
+    ImGui::TextWrapped("The game can't load this save and would crash at the title screen:");
+    for (const auto& r : bad) {
+        only_damaged = only_damaged && r.verdict == Verdict::Damaged;
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, kBad);  // wrapped: save folders can be long paths
+        ImGui::TextWrapped("%s", native(save_dir + "/SAVEDATA00/" + r.name).c_str());
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", r.detail.c_str());
+        ImGui::TextWrapped("%s", dcp::save_check::explain(r.verdict));
+    }
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    ImGui::TextWrapped("Move it aside: the file is renamed to %s.unreadable (nothing is deleted) and the game starts "
+                       "without it. Put a working copy back as %s later to use it.",
+                       bad.empty() ? "SAVE0.DAT" : bad[0].name.c_str(), bad.empty() ? "SAVE0.DAT" : bad[0].name.c_str());
+    ImGui::PopStyleColor();
+    if (!status.empty()) ImGui::TextColored(kBad, "%s", status.c_str());
+    ImGui::Spacing();
+    if (ImGui::Button("Move it aside and play")) {
+        status.clear();
+        for (const auto& r : bad)
+            if (!dcp::save_check::move_aside(r)) status = "Could not rename " + r.name + " (is it open somewhere?).";
+        if (status.empty()) start = true, ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Open save folder")) open_in_explorer(save_dir + "/SAVEDATA00");
+    ImGui::SameLine();
+    if (only_damaged && ImGui::Button("Play anyway")) start = true, ImGui::CloseCurrentPopup();
+    if (only_damaged) ImGui::SameLine();
+    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    return start;
+}
+
 template <class Act>
 void draw_friend_lists(const dcp::net::FriendsState& L, bool busy, Act act, std::string& confirm_remove, float scale);
 
@@ -1009,11 +1059,12 @@ void draw_friend_lists(const dcp::net::FriendsState& L, bool busy, Act act, std:
 }  // namespace
 
 int main(int argc, char** argv) {
-    bool selftest = false;
+    bool selftest = false, play_now = false;
     std::string first_tab = "Game";  // --tab <name>: open that page first (e.g. --tab Online)
     std::string updated_from;        // --updated <old version>: started by the updater
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--selftest") == 0) selftest = true;
+        else if (std::strcmp(argv[i], "--play") == 0) play_now = true;
         else if (std::strcmp(argv[i], "--tab") == 0 && i + 1 < argc) first_tab = argv[++i];
         else if (std::strcmp(argv[i], "--updated") == 0 && i + 1 < argc) {
             dcp::update::Version v = dcp::update::parse_version(argv[++i]);
@@ -1030,6 +1081,18 @@ int main(int argc, char** argv) {
     if (!valid_name(set.name)) {
         set.name = fallback_name;
         if (!selftest) save_settings(settings_path, set);
+    }
+    Game game;
+    // --play: the Play button without the window. Waits so Steam sees the game running; on anything that needs
+    // the player it falls through to the launcher, which then shows the reason (Play bar, log popup).
+    if (play_now && !selftest && set.saves_chosen && dump_ok(validate_dump(set.dump)) &&
+        dcp::save_check::bad_saves(std::filesystem::path(widen(set.saves.empty() ? saves : set.saves))).empty()) {
+        if (!start_game(game, set, log_path)) game.failed = true;
+        else {
+            WaitForSingleObject(game.proc, INFINITE);
+            poll_game(game, log_path);
+            if (!game.failed) return 0;
+        }
     }
     Controls ctl = load_controls(input_path);
     std::string status;  // one-line feedback under the Controls table
@@ -1089,7 +1152,6 @@ int main(int argc, char** argv) {
     ImGui_ImplSDL3_InitForOpenGL(win, gl);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    Game game;
     ConnTest conn;
     Art art;
     // Online identity shared with dcp_run (identity.ini in the user dir, created on first start).
@@ -1107,6 +1169,9 @@ int main(int argc, char** argv) {
         if (set.check_updates) upd.start_check();
     }
     bool ask_saves = !set.saves_chosen && !selftest;  // first start: where should saves go?
+    std::vector<dcp::save_check::Result> bad_saves;  // Play found unreadable saves
+    std::string bad_saves_status;
+    bool open_bad_saves = false;
     int capture = -1;      // index into ctl.binds awaiting a key / mouse button
     dcp::PadSetup pad_setup;
     bool reset_pad_setups = false;
@@ -1381,6 +1446,10 @@ int main(int argc, char** argv) {
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The game's own Japanese layout; button prompts follow it. Combat buttons stay the same.\n"
                                       "Keyboard/mouse: the key bound to Circle confirms. Applies the next time the game starts.");
+                ImGui::Checkbox("Controller rumble (vibration)", &set.rumble);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Off: no controller vibrates (DualShock 4, DualSense, Xbox and others).\n"
+                                      "Applies the next time the game starts.");
                 if (ImGui::Button("Reset to defaults")) {
                     ctl = default_controls();
                     reset_pad_setups = true;
@@ -1800,7 +1869,11 @@ int main(int argc, char** argv) {
             ImGui::BeginDisabled(!can_play);
             if (ImGui::Button(running ? "Running..." : "PLAY", play)) {
                 save_settings(settings_path, set);
-                if (!start_game(game, set, log_path)) game.failed = true;
+                // An unreadable save (an encrypted console copy) crashes the game at the title: ask first.
+                bad_saves = dcp::save_check::bad_saves(std::filesystem::path(widen(set.saves.empty() ? saves : set.saves)));
+                bad_saves_status.clear();
+                if (!bad_saves.empty()) open_bad_saves = true;  // opened below, outside the bar's styles
+                else if (!start_game(game, set, log_path)) game.failed = true;
             }
             ImGui::EndDisabled();
             if (font_nav) ImGui::PopFont();
@@ -1809,6 +1882,13 @@ int main(int argc, char** argv) {
         ImGui::EndChild();
         ImGui::EndGroup();
 
+        if (open_bad_saves) {
+            ImGui::OpenPopup("Save file problem");
+            open_bad_saves = false;
+        }
+        if (draw_bad_saves(bad_saves, bad_saves_status, set.saves.empty() ? saves : set.saves, io.DisplaySize) &&
+            !start_game(game, set, log_path))
+            game.failed = true;
         if (game.show_tail) {
             ImGui::OpenPopup("Last run log");
             game.show_tail = false;

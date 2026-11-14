@@ -162,6 +162,7 @@ public:
     }
     void set_vibration(int pad, uint8_t large, uint8_t small) override {
         std::lock_guard<std::mutex> lk(mu_);
+        if (!rumble_on_) return;  // launcher: Controller rumble off (DCP_RUMBLE=0)
         if (pad >= 0 && pad < 4) rumble_[pad] = {large, small, true};
     }
     void set_light_bar(int pad, uint8_t r, uint8_t g, uint8_t b) override {
@@ -464,6 +465,7 @@ private:
     std::vector<SDL_Gamepad*> pads_;
     dcp::hle::PadState snap_[4];
     Rumble rumble_[4];
+    const bool rumble_on_ = [] { const char* r = std::getenv("DCP_RUMBLE"); return !r || std::strcmp(r, "0") != 0; }();
     Led led_[4];
 };
 

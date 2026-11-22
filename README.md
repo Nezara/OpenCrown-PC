@@ -60,6 +60,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 - 🌐 **Online co-op** for up to 4 players, using the game's own netcode over direct peer-to-peer connections, with friend codes and **room text chat**.
 - 🎥 **Separate cameras online** *(new in 1.0.8)*. In online adventures each player's screen follows their own character, and fights hold the party together until the enemies are beaten. Works on Windows, Linux and Android. ([details](#separate-cameras))
 - 🧑‍🎨 **Customize** *(new in 1.0.10, experimental)*. Edit Character has a new colour slot to recolour parts of your character and show or hide headgear; other PC/Linux players see your look online. Windows and Linux; its source isn't public yet.
+- 🗡️ **Transmogrify** *(new in 1.2 and Mobile 1.9.4)*. A new row in Morgan's shop changes how a weapon or shield looks, for free, and can restore the original look. Windows, Linux and Android; its source isn't public yet.
 - 🌍 **Fan translations and mods.** Modified game archives (for example a fan translation) are accepted.
 - 🇯🇵 **Japanese button layout** option: Circle confirms and Cross cancels in menus.
 - ⏭️ **Optional story and tutorial skip** on new characters (details [below](#what-is-changed-in-the-game)).
@@ -86,7 +87,7 @@ Dragon's Crown Pro is a beautiful game made by a small studio. If you enjoy it h
 | | |
 |---|---|
 | **OS** | Windows 10 or 11, 64-bit, **or** 64-bit Linux with glibc 2.35+ (Steam Deck / SteamOS 3.5+, Ubuntu 22.04+, Debian 12+, Fedora, Arch, ...) |
-| **Android (beta)** | Android 9+, 64-bit ARM CPU, Vulkan 1.1, and your own decrypted PS Vita dump (PCSE00019) with the 1.09 update. See [Android](#android-beta). |
+| **Android (beta)** | Android 9+, 64-bit ARM CPU, Vulkan 1.1, and your own decrypted PS Vita dump (PCSE00019, or the Chinese Asia version PCSH00050) with the 1.09 update. See [Android](#android-beta). |
 | **GPU** | Direct3D 12 or Vulkan for the default renderer; anything with OpenGL 3.3 (most GPUs from the last ~12 years) as the fallback |
 | **CPU** | A modern x86-64 CPU (the game's code runs on it directly) |
 | **Game** | Your own dump of **Dragon's Crown Pro (CUSA10454)** |
@@ -98,7 +99,7 @@ OpenCrown needs the game's files from a console you own. Which console depends o
 
 **PC (Windows) and Linux / Steam Deck:** **Dragon's Crown Pro (CUSA10454)** from **a PS4 or PS5 you own**: the **decrypted** `eboot.bin` together with the rest of the game folder (the files the game reads at run time and the `sce_sys` folder).
 
-**OpenCrown Mobile (Android):** **Dragon's Crown (PCSE00019)** from **a PS Vita you own**, as two folders:
+**OpenCrown Mobile (Android):** **Dragon's Crown (PCSE00019)** or the **Chinese Asia version (PCSH00050)** *(new in Mobile 1.9.4)* from **a PS Vita you own**, as two folders:
 
 - **The base game:** the **decrypted** `eboot.bin` together with the rest of the game folder (the `sce_module` and `sce_sys` folders and the files the game reads at run time).
 - **The 1.09 update:** laid out the same way, with its own **decrypted** `eboot.bin`. Other update versions aren't supported.
@@ -292,6 +293,7 @@ The lobby is a small open-source Cloudflare Worker that lives in [`server/lobby-
 
 This is an early release from a hobby project, so expect a few rough edges:
 
+- **Groups split across two homes** (for example, four players on four computers in two households) may run into connection problems. If this happens to you, please send a bug report from the launcher; it helps us track it down.
 - **Very strict networks** (some mobile or carrier-grade NAT connections) can stop the direct connection. There's no relay server yet.
 - **Join Friend's Room between Mobile and PC** is new in Mobile 0.1.9 and has only been tested with both players on the same network so far. It should work across different networks too; if it doesn't, a bug report helps.
 - **Friend status** can take about 10 seconds to update.
@@ -444,6 +446,7 @@ The programs aren't code-signed (signing certificates cost money), and a program
 - **Vanillaware** and **Atlus** for making Dragon's Crown, a game that's still gorgeous years later.
 - **Nezara**, project lead, bug hunting, diagnosing and a lot of testing, again and again and again. 
 - **Claude** (Anthropic), coding and reverse-engineering contributor.
+- **Shadow0116**, Chinese Asia version support contributor. Their testing and the time they donated were invaluable in getting it working.
 - The [shadPS4](https://github.com/shadps4-emu/shadPS4) project, used as a reference to compare against during early stages of development. 
 - [SDL](https://www.libsdl.org/), [Dear ImGui](https://github.com/ocornut/imgui), [FreeType](https://freetype.org/), [MiniUPnPc](https://miniupnp.tuxfamily.org/) and [Mbed TLS](https://github.com/Mbed-TLS/mbedtls), which make this possible.
 

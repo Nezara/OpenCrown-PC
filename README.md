@@ -152,6 +152,10 @@ Everything is in one file: `OpenCrown-<version>-x86_64.AppImage` from [Releases]
 
 On Linux, settings, saves and logs live in `~/.local/share/OpenCrown/`. Updating through the launcher replaces the AppImage in place, so your Steam shortcut keeps working (the file name keeps its old version number; that's expected).
 
+### macOS (Apple Silicon)
+
+There is a community Mac port by **Alountk**: **[OpenCrown for Mac](https://github.com/Alountk/OpenCrown-MAC)**. It is a separate project with its own releases, so please report Mac problems there.
+
 ### Android (beta)
 
 **OpenCrown Mobile** runs the game's **PS Vita** version on Android. It's lighter to run (960×544, a quarter of the pixels of 1080p), cheaper to translate on phone CPUs (32-bit ARM to 64-bit ARM instead of x86-64) and the game already supports touch. It plays online together with OpenCrown PC, and saves move between the two with no conversion.
